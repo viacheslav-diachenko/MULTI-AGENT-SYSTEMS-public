@@ -1,0 +1,5 @@
+openai>=1.86.0
+ddgs>=7.0
+trafilatura>=2.0.0
+pydantic>=2.12.0
+pydantic-settings>=2.12.0

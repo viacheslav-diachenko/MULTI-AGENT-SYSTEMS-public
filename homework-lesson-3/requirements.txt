@@ -1,0 +1,6 @@
+langgraph>=1.1.0
+langchain-openai>=1.1.10
+ddgs>=7.0
+trafilatura>=2.0.0
+pydantic>=2.12.0
+pydantic-settings>=2.12.0
