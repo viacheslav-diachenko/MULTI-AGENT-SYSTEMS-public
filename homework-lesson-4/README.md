@@ -7,6 +7,13 @@
 Еволюція [homework-lesson-3](../homework-lesson-3/) — замість `create_react_agent` (LangGraph)
 використовується повністю прозорий цикл на базі `openai` SDK.
 
+## Demo
+
+![Research Agent Demo](demo.gif)
+
+Full session transcript: [example_output/demo_session.md](example_output/demo_session.md) |
+Model-generated report: [example_output/report.md](example_output/report.md)
+
 ---
 
 ## Що змінилось: Lesson-3 → Lesson-4
@@ -156,6 +163,10 @@ homework-lesson-4/
 ├── requirements.txt     # Залежності (без langgraph/langchain)
 ├── .env.example         # Шаблон змінних середовища
 ├── .gitignore
+├── demo.gif             # Анімація демо-сесії
+├── example_output/
+│   ├── demo_session.md  # Повний вивід демо-сесії (tool calls + відповіді)
+│   └── report.md        # Чистий Markdown-контент відповідей агента
 └── README.md
 ```
 
