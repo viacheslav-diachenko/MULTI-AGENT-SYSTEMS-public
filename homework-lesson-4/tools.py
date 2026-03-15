@@ -1,13 +1,13 @@
 """Research Agent tools.
 
-Plain Python functions (no framework decorators) with JSON Schema definitions
-for the OpenAI function calling API. Each tool handles its own errors and
-returns human-readable messages on failure.
+Auto-generates OpenAI function calling schemas from type hints and docstrings.
+Each tool is registered via the @tool decorator — no manual JSON required.
 """
 
+import inspect
 import os
 import logging
-from typing import Optional
+from typing import Optional, get_type_hints
 
 import trafilatura
 from ddgs import DDGS
@@ -17,13 +17,60 @@ from config import Settings
 logger = logging.getLogger(__name__)
 settings = Settings()
 
+# ---------------------------------------------------------------------------
+# Auto-schema decorator
+# ---------------------------------------------------------------------------
+
+TOOL_REGISTRY: dict[str, callable] = {}
+TOOL_SCHEMAS: list[dict] = []
+
+_PY_TYPE_TO_JSON = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+}
+
+
+def tool(func):
+    """Register a function as an agent tool with auto-generated JSON schema."""
+    hints = get_type_hints(func)
+    sig = inspect.signature(func)
+
+    properties = {}
+    required = []
+
+    for name, param in sig.parameters.items():
+        json_type = _PY_TYPE_TO_JSON.get(hints.get(name, str), "string")
+        properties[name] = {"type": json_type, "description": name}
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+
+    schema = {
+        "type": "function",
+        "function": {
+            "name": func.__name__,
+            "description": inspect.getdoc(func) or "",
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+    TOOL_SCHEMAS.append(schema)
+    TOOL_REGISTRY[func.__name__] = func
+    return func
+
 
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
+@tool
 def web_search(query: str, max_results: Optional[int] = None) -> str:
-    """Search the internet using DuckDuckGo."""
+    """Search the internet using DuckDuckGo. Returns titles, URLs, and snippets."""
     limit = max_results or settings.max_search_results
     try:
         results = DDGS().text(query, max_results=limit)
@@ -44,6 +91,7 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
     return "\n\n".join(formatted)
 
 
+@tool
 def read_url(url: str) -> str:
     """Fetch and extract the main text content from a web page."""
     try:
@@ -83,6 +131,7 @@ def read_url(url: str) -> str:
     return text
 
 
+@tool
 def write_report(filename: str, content: str) -> str:
     """Save a Markdown report to a file in the output directory."""
     safe_name = os.path.basename(filename)
@@ -102,97 +151,3 @@ def write_report(filename: str, content: str) -> str:
 
     abs_path = os.path.abspath(filepath)
     return f"Report saved successfully: {abs_path}"
-
-
-# ---------------------------------------------------------------------------
-# JSON Schema definitions (OpenAI function calling format)
-# ---------------------------------------------------------------------------
-
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": (
-                "Search the internet using DuckDuckGo. "
-                "Returns a list of search results with titles, URLs, "
-                "and short snippets."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query string.",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": (
-                            "Number of results to return (default: 5)."
-                        ),
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_url",
-            "description": (
-                "Fetch and extract the main text content from a web page. "
-                "Use this when you need the full text of an article found "
-                "via web_search."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The full URL of the web page to read.",
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_report",
-            "description": (
-                "Save a Markdown report to a file in the output directory. "
-                "Use ONLY when the user explicitly asks to save a report."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": (
-                            "Name of the file (e.g. 'rag_comparison.md')."
-                        ),
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": (
-                            "The full Markdown content of the report."
-                        ),
-                    },
-                },
-                "required": ["filename", "content"],
-            },
-        },
-    },
-]
-
-# ---------------------------------------------------------------------------
-# Registry: tool name -> callable
-# ---------------------------------------------------------------------------
-
-TOOL_REGISTRY: dict[str, callable] = {
-    "web_search": web_search,
-    "read_url": read_url,
-    "write_report": write_report,
-}

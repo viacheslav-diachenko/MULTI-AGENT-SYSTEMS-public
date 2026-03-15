@@ -47,8 +47,7 @@ def main() -> None:
             continue
 
         try:
-            answer = agent.chat(user_input)
-            print(f"\nAgent: {answer}")
+            agent.chat(user_input)  # streaming prints tokens in real time
         except KeyboardInterrupt:
             print("\n--- Interrupted. You can continue or type 'exit'. ---")
         except Exception as e:

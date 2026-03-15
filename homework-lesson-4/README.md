@@ -2,10 +2,12 @@
 
 Дослідницький агент з **власною реалізацією ReAct-циклу** (без фреймворкових абстракцій).
 Агент отримує питання від користувача, самостійно шукає інформацію в інтернеті,
-аналізує знайдені джерела та генерує вичерпну структуровану відповідь.
+аналізує знайдені джерела та генерує вичерпну структуровану відповідь
+з **потоковим виводом токенів** (streaming) у реальному часі.
 
 Еволюція [homework-lesson-3](../homework-lesson-3/) — замість `create_react_agent` (LangGraph)
-використовується повністю прозорий цикл на базі `openai` SDK.
+використовується повністю прозорий цикл на базі `openai` SDK з streaming та
+автогенерацією tool schemas з type hints.
 
 ## Demo
 
@@ -24,12 +26,13 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 |--------|------------------|-------------------|
 | **Агентний цикл** | `create_react_agent()` з LangGraph | Власний `while`-loop у класі `ResearchAgent` |
 | **Оркестрація tool calls** | Фреймворк автоматично парсить і виконує | Ручна перевірка, парсинг і виклик у циклі |
-| **Визначення tools** | `@tool` декоратор LangChain | JSON Schema (OpenAI function calling format) |
+| **Визначення tools** | `@tool` декоратор LangChain | `@tool` декоратор (власний) — автогенерація JSON Schema з type hints + docstring |
 | **Пам'ять діалогу** | `MemorySaver` checkpointer + `thread_id` | Простий `list[dict]` — масив повідомлень |
 | **LLM клієнт** | `ChatOpenAI` (langchain-openai) | `openai.OpenAI` (офіційний SDK) |
 | **XML парсинг** | `Qwen3ChatWrapper` (клас 80+ рядків, наслідує `BaseChatModel`) | Standalone функція `parse_xml_tool_calls()` (~25 рядків) |
 | **Залежності** | `langgraph`, `langchain-openai`, `langchain-core` | `openai` (єдина LLM-залежність) |
 | **System prompt** | Базовий (capabilities + rules) | Покращений (роль, ReAct метод, формат, anti-patterns) |
+| **Streaming** | Через LangGraph stream API | Нативний `stream=True` (OpenAI SDK) — токени виводяться в реальному часі |
 | **Логування tool calls** | Зовнішнє (в REPL через stream parsing) | Вбудоване в ReAct loop (emoji маркери) |
 | **Обробка помилок** | На рівні фреймворку | Явна: try/except на кожен tool + iteration limit + graceful fallback |
 | **Файлів коду** | 5 (`agent.py`, `tools.py`, `config.py`, `main.py`, `tool_parser.py`) | 4 (`agent.py`, `tools.py`, `config.py`, `main.py`) |
@@ -39,19 +42,27 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 1. **Повна прозорість** — кожен крок ReAct-циклу (Think → Act → Observe) видимий у коді.
    Немає "магії" фреймворку — зрозуміло, як саме агент приймає рішення, викликає tools і будує відповідь.
 
-2. **Мінімальні залежності** — видалено `langgraph` і всі пакети `langchain-*`.
+2. **Streaming у реальному часі** — відповідь агента виводиться токен за токеном через
+   `stream=True` (OpenAI SDK). Користувач бачить текст одразу, не чекаючи повної генерації.
+   Tool call deltas акумулюються через `_ToolCallAccumulator`.
+
+3. **Автогенерація tool schemas** — декоратор `@tool` автоматично створює OpenAI JSON Schema
+   з type hints і docstring функції. Немає ручних JSON-описів — додаєш функцію з `@tool`,
+   і схема генерується сама.
+
+4. **Мінімальні залежності** — видалено `langgraph` і всі пакети `langchain-*`.
    Єдина LLM-залежність — офіційний `openai` SDK. Це зменшує розмір virtual environment,
    спрощує debugging і знімає ризики breaking changes у фреймворку.
 
-3. **Гнучкість tool call parsing** — dual extraction strategy: спочатку перевіряються
+5. **Гнучкість tool call parsing** — dual extraction strategy: спочатку перевіряються
    native `tool_calls` з API, потім XML fallback для Qwen3/SGLang. Це робить агента
    сумісним з будь-яким OpenAI-compatible backend.
 
-4. **Явна обробка помилок** — кожен tool виклик обгорнутий у `try/except`, невідомі tools
+6. **Явна обробка помилок** — кожен tool виклик обгорнутий у `try/except`, невідомі tools
    повертають зрозуміле повідомлення замість crash. Ліміт ітерацій з graceful fallback:
    якщо агент не завершив за N ітерацій, він отримує nudge і генерує фінальну відповідь.
 
-5. **Покращений system prompt** — структурований за секціями (Role, Tools, Strategy,
+7. **Покращений system prompt** — структурований за секціями (Role, Tools, Strategy,
    Format, Rules) з явними anti-patterns і обмеженнями поведінки.
 
 ---
@@ -69,27 +80,29 @@ Model-generated report: [example_output/report.md](example_output/report.md)
                  │
                  ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                  agent.py — ResearchAgent                             │
+│                  agent.py — ResearchAgent (streaming)                  │
 │                                                                      │
 │   ┌────────────────────────────────────────────────────────────────┐ │
-│   │              Custom ReAct Loop (while-цикл)                    │ │
+│   │         Custom ReAct Loop (while-цикл + streaming)             │ │
 │   │                                                                │ │
 │   │   1. Додати user message до self.messages                      │ │
-│   │   2. Відправити [system + messages] → LLM API                  │ │
-│   │   3. Перевірити відповідь на tool_calls:                       │ │
+│   │   2. _stream_llm() → stream=True → токени в stdout             │ │
+│   │      ├─ content deltas → sys.stdout.write() (real-time)        │ │
+│   │      └─ tool_call deltas → _ToolCallAccumulator                │ │
+│   │   3. Перевірити результат на tool_calls:                       │ │
 │   │      ├─ native tool_calls (OpenAI format)?                     │ │
 │   │      └─ XML fallback (Qwen3 <tool_call> tags)?                 │ │
 │   │   4. Якщо tool calls є:                                        │ │
 │   │      ├─ 🔧 Лог: назва + аргументи                              │ │
 │   │      ├─ Виконати tool → отримати результат                     │ │
-│   │      ├─ 📎 Лог: розмір результату                               │ │
+│   │      ├─ ✅ Лог: розмір результату                               │ │
 │   │      ├─ Додати результат до messages                           │ │
 │   │      └─ Повернутись до кроку 2                                 │ │
-│   │   5. Якщо tool calls немає → фінальна відповідь                │ │
+│   │   5. Якщо tool calls немає → фінальна відповідь (вже в stdout) │ │
 │   │   6. Якщо ліміт ітерацій → nudge + останній LLM call           │ │
 │   └────────────────────────────────────────────────────────────────┘ │
 │                                                                      │
-│   openai.OpenAI ──────────────→ SGLang / vLLM / OpenAI API          │
+│   openai.OpenAI(stream=True) ─→ SGLang / vLLM / OpenAI API          │
 │   self.messages: list[dict] ──→ Пам'ять діалогу                      │
 │   parse_xml_tool_calls() ─────→ Regex XML парсер                     │
 └────────────────┬─────────────────────────────────────────────────────┘
@@ -98,9 +111,11 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 ┌──────────────────────────────────────────────────────────────────────┐
 │                     tools.py — 3 інструменти                         │
 │                                                                      │
-│   TOOL_SCHEMAS ─── JSON Schema (OpenAI function calling format)      │
+│   @tool decorator ── auto-generates JSON Schema from type hints      │
+│   TOOL_SCHEMAS ─── auto-populated list (OpenAI function format)      │
 │   TOOL_REGISTRY ── dict: name → callable                             │
 │                                                                      │
+│   @tool                    @tool                   @tool              │
 │   web_search(query)        read_url(url)        write_report(f, c)   │
 │   └─ DDGS (DuckDuckGo)    └─ trafilatura        └─ File I/O         │
 │      → snippets + URLs       → full text            → .md file       │
@@ -174,8 +189,8 @@ homework-lesson-4/
 
 | Файл | Рядків | Відповідальність |
 |------|--------|------------------|
-| `agent.py` | ~260 | Клас `ResearchAgent` з custom ReAct loop. XML парсер для Qwen3. Dual extraction (native + XML). Error handling + iteration limit. |
-| `tools.py` | ~200 | Три tool-функції (plain Python, без декораторів). `TOOL_SCHEMAS` — JSON Schema для API. `TOOL_REGISTRY` — маппінг name → callable. |
+| `agent.py` | ~270 | Клас `ResearchAgent` зі streaming ReAct loop. `_stream_llm()` виводить токени в реальному часі. `_ToolCallAccumulator` для збору tool call deltas. XML парсер для Qwen3. Dual extraction (native + XML). |
+| `tools.py` | ~130 | Декоратор `@tool` — автогенерація JSON Schema з type hints + docstring. Три tool-функції. `TOOL_SCHEMAS` і `TOOL_REGISTRY` заповнюються автоматично при імпорті. |
 | `config.py` | ~100 | `Settings` (Pydantic BaseSettings) для завантаження з `.env`. `SYSTEM_PROMPT` зі структурованими секціями prompt engineering. |
 | `main.py` | ~70 | REPL: input loop, команди (exit/quit/new), виклик `agent.chat()`, error handling. |
 
@@ -189,25 +204,17 @@ homework-lesson-4/
 | `read_url` | Витягування тексту зі сторінки (≤8000 chars) | `url` (required) | `trafilatura` |
 | `write_report` | Збереження Markdown-звіту у файл | `filename` (required), `content` (required) | `builtins` |
 
-Tools визначені як **JSON Schema** у форматі OpenAI function calling API:
+Tool schemas **автогенеруються** з type hints і docstring через декоратор `@tool`:
 
-```json
-{
-  "type": "function",
-  "function": {
-    "name": "web_search",
-    "description": "Search the internet using DuckDuckGo...",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": { "type": "string", "description": "The search query string." },
-        "max_results": { "type": "integer", "description": "Number of results (default: 5)." }
-      },
-      "required": ["query"]
-    }
-  }
-}
+```python
+@tool
+def web_search(query: str, max_results: Optional[int] = None) -> str:
+    """Search the internet using DuckDuckGo. Returns titles, URLs, and snippets."""
+    ...
 ```
+
+Декоратор автоматично створює OpenAI JSON Schema і реєструє функцію в `TOOL_REGISTRY`.
+Немає ручних JSON-описів — додаєш функцію з `@tool`, і все працює.
 
 ---
 
@@ -266,17 +273,17 @@ python main.py
 
 You: Порівняй naive RAG та sentence-window retrieval
 
-  🔧 Tool call: web_search(query="naive RAG approach explained")
-  📎 Result: 1245 chars
+  🔧 [web_search] naive RAG approach explained
+  ✅ [web_search] → 1245 chars
 
-  🔧 Tool call: web_search(query="sentence window retrieval RAG")
-  📎 Result: 1389 chars
+  🔧 [web_search] sentence window retrieval RAG
+  ✅ [web_search] → 1389 chars
 
-  🔧 Tool call: read_url(url="https://example.com/rag-comparison")
-  📎 Result: 8000 chars
+  🔧 [read_url] https://example.com/rag-comparison
+  ✅ [read_url] → 8000 chars
 
 Agent: ## Порівняння Naive RAG та Sentence-Window Retrieval
-
+                                        ← streaming: токени з'являються один за одним
 ### 1. Naive RAG
 Найпростіший підхід, де документи розбиваються на фіксовані чанки...
 
@@ -290,11 +297,11 @@ Agent: ## Порівняння Naive RAG та Sentence-Window Retrieval
 
 You: А який краще для production?
 
-  🔧 Tool call: web_search(query="RAG production best practices 2024")
-  📎 Result: 1156 chars
+  🔧 [web_search] RAG production best practices 2024
+  ✅ [web_search] → 1156 chars
 
 Agent: Для production рекомендую Sentence-Window підхід, оскільки...
-[Агент пам'ятає контекст попереднього питання]
+[Агент пам'ятає контекст попереднього питання — streaming вивід]
 
 You: exit
 Goodbye!

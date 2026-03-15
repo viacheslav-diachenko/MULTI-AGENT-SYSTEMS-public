@@ -1,7 +1,7 @@
-"""Research Agent with a custom ReAct loop.
+"""Research Agent with a custom ReAct loop and streaming output.
 
 Replaces LangGraph's create_react_agent with a hand-rolled loop that:
-- Sends messages to the OpenAI-compatible API with tool definitions
+- Streams responses from the OpenAI-compatible API with tool definitions
 - Parses tool calls from the response (native or XML fallback for Qwen3)
 - Executes tools and appends results to the conversation
 - Repeats until the model produces a final text answer or the iteration limit is hit
@@ -11,8 +11,10 @@ No LangGraph, no LangChain — just the openai SDK and plain Python.
 
 import json
 import re
+import sys
 import uuid
 import logging
+from dataclasses import dataclass, field
 
 import openai
 
@@ -23,10 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# XML tool call parser (ported from homework-lesson-3/tool_parser.py)
+# XML tool call parser (Qwen3 fallback)
 # ---------------------------------------------------------------------------
-# Qwen3.5 via SGLang may output tool calls as XML in the content field
-# instead of using the native OpenAI tool_calls format.
 
 _TOOL_CALL_RE = re.compile(
     r"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
@@ -40,12 +40,7 @@ _PARAM_RE = re.compile(
 
 
 def parse_xml_tool_calls(content: str) -> tuple[str, list[dict]]:
-    """Parse Qwen3 XML tool calls from message content.
-
-    Returns:
-        Tuple of (remaining_text, list_of_tool_calls) where each tool call
-        is a dict with 'name', 'args', and 'id' keys.
-    """
+    """Parse Qwen3 XML tool calls from message content."""
     tool_calls = []
     for match in _TOOL_CALL_RE.finditer(content):
         func_name = match.group(1)
@@ -71,15 +66,34 @@ def parse_xml_tool_calls(content: str) -> tuple[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
+# Streaming accumulator
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ToolCallAccumulator:
+    """Accumulates streamed tool call deltas into a complete tool call."""
+    id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+
+@dataclass
+class _StreamResult:
+    """Result of consuming one full streamed response."""
+    content: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Research Agent
 # ---------------------------------------------------------------------------
 
 class ResearchAgent:
-    """ReAct agent that autonomously searches the web and synthesizes answers.
+    """ReAct agent with streaming output.
 
     The agent maintains a conversation history (list of dicts in OpenAI
-    message format) and uses a simple while-loop to implement the
-    Thought-Action-Observation cycle.
+    message format) and uses a while-loop to implement the
+    Thought-Action-Observation cycle with real-time token streaming.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -97,10 +111,8 @@ class ResearchAgent:
         self.messages.clear()
 
     def chat(self, user_input: str) -> str:
-        """Process a user message through the ReAct loop.
+        """Process a user message through the ReAct loop with streaming.
 
-        Appends the user message to history, then loops:
-        call LLM -> check for tool calls -> execute tools -> repeat.
         Returns the final text answer.
         """
         self.messages.append({"role": "user", "content": user_input})
@@ -108,19 +120,49 @@ class ResearchAgent:
         for iteration in range(self.max_iterations):
             logger.debug("ReAct iteration %d/%d", iteration + 1, self.max_iterations)
 
-            response = self._call_llm()
-            assistant_msg = response.choices[0].message
+            result = self._stream_llm()
+            tool_calls = result.tool_calls
 
-            tool_calls = self._extract_tool_calls(assistant_msg)
+            # Check XML fallback if no native tool calls
+            if not tool_calls and result.content:
+                _, xml_calls = parse_xml_tool_calls(result.content)
+                if xml_calls:
+                    logger.info(
+                        "Parsed %d XML tool call(s): %s",
+                        len(xml_calls),
+                        [tc["name"] for tc in xml_calls],
+                    )
+                    tool_calls = xml_calls
 
             if not tool_calls:
                 # Final answer — no more tool calls
-                content = assistant_msg.content or ""
+                content = result.content
+                if not content:
+                    content = _TOOL_CALL_RE.sub("", result.content).strip()
                 self.messages.append({"role": "assistant", "content": content})
                 return content
 
             # Append assistant message with tool_calls to history
-            self._append_assistant_with_tools(assistant_msg, tool_calls)
+            # Strip XML tags from content if XML-parsed
+            display_content = result.content
+            if not result.tool_calls and display_content:
+                display_content, _ = parse_xml_tool_calls(display_content)
+
+            self.messages.append({
+                "role": "assistant",
+                "content": display_content,
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["args"]),
+                        },
+                    }
+                    for tc in tool_calls
+                ],
+            })
 
             # Execute each tool call
             for tc in tool_calls:
@@ -128,26 +170,21 @@ class ResearchAgent:
                 args = tc["args"]
                 call_id = tc["id"]
 
-                # Log the tool call (same format as homework-lesson-3)
                 args_preview = next(
                     (v for v in args.values() if isinstance(v, str)), ""
                 )
                 print(f"\n  \U0001f527 [{name}] {args_preview}")
 
-                # Execute
-                result = self._execute_tool(name, args)
+                result_str = self._execute_tool(name, args)
+                print(f"  \u2705 [{name}] \u2192 {len(result_str)} chars")
 
-                # Log the result
-                print(f"  \u2705 [{name}] \u2192 {len(result)} chars")
-
-                # Append tool result to history
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": result,
+                    "content": result_str,
                 })
 
-        # Iteration limit reached — ask model to finalize
+        # Iteration limit reached — force final answer
         logger.warning("Iteration limit (%d) reached, forcing final answer", self.max_iterations)
         self.messages.append({
             "role": "user",
@@ -158,88 +195,91 @@ class ResearchAgent:
             ),
         })
 
-        response = self._call_llm()
-        content = response.choices[0].message.content or (
+        final = self._stream_llm()
+        content = final.content or (
             "I was unable to complete the research within the iteration limit."
         )
         self.messages.append({"role": "assistant", "content": content})
         return content
 
     # ------------------------------------------------------------------
-    # Private helpers
+    # Streaming
     # ------------------------------------------------------------------
 
-    def _call_llm(self) -> openai.types.chat.ChatCompletion:
-        """Call the OpenAI-compatible API with the current conversation."""
+    def _stream_llm(self) -> _StreamResult:
+        """Stream a response from the LLM, printing tokens in real time.
+
+        Returns the fully accumulated _StreamResult with content and tool_calls.
+        """
         request_messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
         ] + self.messages
 
-        return self.client.chat.completions.create(
+        stream = self.client.chat.completions.create(
             model=self.model,
             messages=request_messages,
             tools=TOOL_SCHEMAS,
             temperature=self.temperature,
+            stream=True,
         )
 
-    def _extract_tool_calls(self, message) -> list[dict]:
-        """Extract tool calls from an assistant message.
+        content_parts: list[str] = []
+        tc_accumulators: dict[int, _ToolCallAccumulator] = {}
+        started_text = False
 
-        Checks native OpenAI tool_calls first, then falls back to
-        parsing XML tool calls from the content (Qwen3/SGLang).
-        """
-        # 1. Native tool_calls from the API response
-        if message.tool_calls:
-            calls = []
-            for tc in message.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments)
-                except (json.JSONDecodeError, TypeError):
-                    args = {}
-                calls.append({
-                    "name": tc.function.name,
-                    "args": args,
-                    "id": tc.id,
-                })
-            return calls
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta is None:
+                continue
 
-        # 2. XML fallback — parse content for Qwen3-style tool calls
-        if message.content:
-            _remaining, xml_calls = parse_xml_tool_calls(message.content)
-            if xml_calls:
-                logger.info(
-                    "Parsed %d XML tool call(s): %s",
-                    len(xml_calls),
-                    [tc["name"] for tc in xml_calls],
-                )
-                return xml_calls
+            # --- stream text content ---
+            if delta.content:
+                if not started_text:
+                    sys.stdout.write("\nAgent: ")
+                    started_text = True
+                sys.stdout.write(delta.content)
+                sys.stdout.flush()
+                content_parts.append(delta.content)
 
-        return []
+            # --- accumulate tool call deltas ---
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tc_accumulators:
+                        tc_accumulators[idx] = _ToolCallAccumulator()
+                    acc = tc_accumulators[idx]
+                    if tc_delta.id:
+                        acc.id = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            acc.name = tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            acc.arguments += tc_delta.function.arguments
 
-    def _append_assistant_with_tools(
-        self, message, tool_calls: list[dict]
-    ) -> None:
-        """Append the assistant message with tool_calls in OpenAI format."""
-        # When XML-parsed, strip the XML tags from content
-        content = message.content or ""
-        if not message.tool_calls and content:
-            content, _ = parse_xml_tool_calls(content)
+        if started_text:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
-        self.messages.append({
-            "role": "assistant",
-            "content": content,
-            "tool_calls": [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tc["name"],
-                        "arguments": json.dumps(tc["args"]),
-                    },
-                }
-                for tc in tool_calls
-            ],
-        })
+        # Build result
+        result = _StreamResult(content="".join(content_parts))
+
+        for idx in sorted(tc_accumulators):
+            acc = tc_accumulators[idx]
+            try:
+                args = json.loads(acc.arguments) if acc.arguments else {}
+            except json.JSONDecodeError:
+                args = {}
+            result.tool_calls.append({
+                "name": acc.name,
+                "args": args,
+                "id": acc.id or f"call_{uuid.uuid4().hex[:12]}",
+            })
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Tool execution
+    # ------------------------------------------------------------------
 
     def _execute_tool(self, name: str, args: dict) -> str:
         """Execute a tool by name. Returns result string. Never raises."""
