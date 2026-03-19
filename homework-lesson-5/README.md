@@ -8,6 +8,10 @@
 з повним ingestion pipeline, hybrid retrieval та cross-encoder reranking через
 self-hosted інфраструктуру (без зовнішніх API).
 
+## Demo
+
+![Research Agent with RAG Demo](demo.gif)
+
 ---
 
 ## Що змінилось: Lesson-3 → Lesson-5
