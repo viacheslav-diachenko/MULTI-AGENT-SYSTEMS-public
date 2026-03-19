@@ -144,6 +144,13 @@ User: "Що таке RAG і які є підходи до retrieval?"
 
 ---
 
+### Приклади виводу
+
+- [Згенерований звіт про RAG підходи](example_output/report.md) — повний Markdown-звіт, створений агентом
+- [Транскрипт демо-сесії](example_output/demo_session.md) — повний вивід демо-сесії з tool calls та відповідями
+
+---
+
 ## Структура проєкту
 
 ```
@@ -163,7 +170,10 @@ homework-lesson-5/
 │   ├── large-language-model.pdf
 │   └── retrieval-augmented-generation.pdf
 ├── index/               # Згенерований FAISS index + BM25 JSON (gitignored)
-└── output/              # Згенеровані звіти агента (gitignored)
+├── output/              # Згенеровані звіти агента (gitignored)
+└── example_output/
+    ├── report.md        # Приклад згенерованого звіту
+    └── demo_session.md  # Транскрипт демо-сесії
 ```
 
 ### Опис файлів
