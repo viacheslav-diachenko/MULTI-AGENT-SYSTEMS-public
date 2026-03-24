@@ -4,6 +4,19 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.2.1] - 2026-03-24
+
+### Виправлено
+
+- **XML streaming: partial tag leak** — `<tool` фрагменти могли просочитися в stdout,
+  якщо тег `<tool_call>` приходив частинами по стріму. Додано look-ahead буфер:
+  текст, що може бути початком XML тегу, утримується доки не з'ясується чи це тег.
+- **Budget check перед duplicate filter** — budget check тепер виконується ПІСЛЯ
+  перевірки на дублікат. Раніше batch з 1 duplicate + 1 new при 4/5 budget
+  передчасно зупиняв агента, хоча реально потрібен був лише 1 новий виклик.
+- `example_output/demo_session.md` — додано disclaimer, що сесія записана з v1.0.0
+  (до budget enforcement та XML-safe streaming).
+
 ## [1.2.0] - 2026-03-24
 
 ### Додано

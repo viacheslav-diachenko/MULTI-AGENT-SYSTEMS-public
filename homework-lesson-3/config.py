@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     max_url_content_length: int = 8000
 
     # Agent iteration limits
-    max_iterations: int = 15
     max_tool_calls: int = 5
 
     # Output

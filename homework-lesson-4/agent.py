@@ -152,14 +152,6 @@ class ResearchAgent:
                 self.messages.append({"role": "assistant", "content": content})
                 return content
 
-            # --- Budget check: stop if tool call limit reached ---
-            if tool_call_count + len(tool_calls) > self.max_tool_calls:
-                logger.warning(
-                    "Tool call budget exhausted (%d/%d), forcing final answer",
-                    tool_call_count, self.max_tool_calls,
-                )
-                break
-
             # Append assistant message with tool_calls to history
             # Strip XML tags from content if XML-parsed
             display_content = result.content
@@ -182,13 +174,14 @@ class ResearchAgent:
                 ],
             })
 
-            # Execute each tool call (with duplicate detection)
+            # Execute each tool call (with duplicate detection and budget check)
+            budget_exhausted = False
             for tc in tool_calls:
                 name = tc["name"]
                 args = tc["args"]
                 call_id = tc["id"]
 
-                # --- Duplicate detection ---
+                # --- Duplicate detection (checked before budget) ---
                 call_key = f"{name}:{json.dumps(args, sort_keys=True)}"
                 if call_key in seen_calls:
                     logger.info("Skipping duplicate tool call: %s", call_key)
@@ -201,6 +194,23 @@ class ResearchAgent:
                             "Use the previous result or try different arguments."
                         ),
                     })
+                    continue
+
+                # --- Budget check (only for non-duplicate calls) ---
+                if tool_call_count >= self.max_tool_calls:
+                    logger.warning(
+                        "Tool call budget exhausted (%d/%d)",
+                        tool_call_count, self.max_tool_calls,
+                    )
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": (
+                            "Tool call budget reached. "
+                            "Please synthesize your answer from the information gathered so far."
+                        ),
+                    })
+                    budget_exhausted = True
                     continue
 
                 seen_calls.add(call_key)
@@ -222,6 +232,9 @@ class ResearchAgent:
                     "tool_call_id": call_id,
                     "content": result_str,
                 })
+
+            if budget_exhausted:
+                break
 
         # Budget or iteration limit reached — force final answer
         logger.warning(
@@ -274,6 +287,9 @@ class ResearchAgent:
         tc_accumulators: dict[int, _ToolCallAccumulator] = {}
         started_text = False
         xml_buffering = False  # True once we detect <tool_call> in stream
+        # Look-ahead buffer: holds text that might be the start of <tool_call>.
+        # Only text confirmed NOT to be a tag prefix is printed to stdout.
+        pending_buf = ""
 
         for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -284,24 +300,34 @@ class ResearchAgent:
             if delta.content:
                 content_parts.append(delta.content)
 
-                # Check if we've entered XML tool call territory
                 if not xml_buffering:
-                    accumulated = "".join(content_parts)
-                    if _XML_TOOL_TAG in accumulated:
-                        # Print only the text before the XML tag
-                        pre_xml = accumulated.split(_XML_TOOL_TAG, 1)[0].strip()
-                        if pre_xml and not started_text:
-                            sys.stdout.write("\nAgent: " + pre_xml)
+                    pending_buf += delta.content
+
+                    # Check if the full tag appeared in the buffer
+                    if _XML_TOOL_TAG in pending_buf:
+                        # Print only the safe text before the XML tag
+                        pre_xml = pending_buf.split(_XML_TOOL_TAG, 1)[0]
+                        if pre_xml:
+                            if not started_text:
+                                sys.stdout.write("\nAgent: ")
+                                started_text = True
+                            sys.stdout.write(pre_xml)
                             sys.stdout.flush()
-                            started_text = True
                         xml_buffering = True
-                    else:
-                        # Safe to print — no XML detected yet
+                        pending_buf = ""
+                    elif not any(
+                        _XML_TOOL_TAG.startswith(pending_buf[i:])
+                        for i in range(max(0, len(pending_buf) - len(_XML_TOOL_TAG)), len(pending_buf))
+                        if pending_buf[i:].startswith("<")
+                    ):
+                        # No partial match — safe to flush the entire buffer
                         if not started_text:
                             sys.stdout.write("\nAgent: ")
                             started_text = True
-                        sys.stdout.write(delta.content)
+                        sys.stdout.write(pending_buf)
                         sys.stdout.flush()
+                        pending_buf = ""
+                    # else: buffer might be a partial tag prefix, keep accumulating
                 # If xml_buffering is True, we silently accumulate (no print)
 
             # --- accumulate tool call deltas ---
@@ -318,6 +344,14 @@ class ResearchAgent:
                             acc.name = tc_delta.function.name
                         if tc_delta.function.arguments:
                             acc.arguments += tc_delta.function.arguments
+
+        # Flush any remaining look-ahead buffer (stream ended without XML)
+        if pending_buf and not xml_buffering:
+            if not started_text:
+                sys.stdout.write("\nAgent: ")
+                started_text = True
+            sys.stdout.write(pending_buf)
+            sys.stdout.flush()
 
         if started_text:
             sys.stdout.write("\n")

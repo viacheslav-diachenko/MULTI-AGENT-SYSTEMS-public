@@ -4,6 +4,15 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.2.1] - 2026-03-24
+
+### Змінено
+
+- Видалено мертвий параметр `max_iterations` з `config.py` та `.env.example` —
+  він не використовувався після переходу на `max_tool_calls` → `recursion_limit`.
+- `example_output/demo_session.md` — додано disclaimer, що сесія записана з v1.0.0
+  (до budget enforcement), тому кількість tool calls не відповідає поточним лімітам.
+
 ## [1.2.0] - 2026-03-24
 
 ### Додано

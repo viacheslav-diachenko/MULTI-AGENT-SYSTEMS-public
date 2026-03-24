@@ -1,5 +1,9 @@
 # Research Agent — Demo Session Output
 
+> **Note:** This session was recorded with v1.0.0 (before tool call budget
+> enforcement). The current version (v1.2+) limits tool calls to `MAX_TOOL_CALLS`
+> (default: 5) per question, so real sessions will have fewer tool invocations.
+
 Below is the full output of a demo session with the Research Agent,
 demonstrating web search, URL reading, and conversational memory.
 
