@@ -68,8 +68,9 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 8. **Tool call budget enforcement** — жорсткий ліміт `max_tool_calls` (default: 5)
    enforce-иться в коді, а не лише в prompt. Duplicate calls автоматично пропускаються.
 
-9. **XML-safe streaming** — `_stream_llm()` буферизує контент після виявлення
-   `<tool_call>` тегу, не допускаючи витоку сирого XML в stdout.
+9. **XML-safe streaming** — `_stream_llm()` використовує look-ahead буфер:
+   текст, що може бути початком `<tool_call>`, утримується доки не підтвердиться
+   чи це тег. Навіть часткові фрагменти (`<tool`) не витікають в stdout.
 
 ---
 
@@ -198,7 +199,7 @@ homework-lesson-4/
 
 | Файл | Рядків | Відповідальність |
 |------|--------|------------------|
-| `agent.py` | ~270 | Клас `ResearchAgent` зі streaming ReAct loop. `_stream_llm()` виводить токени в реальному часі. `_ToolCallAccumulator` для збору tool call deltas. XML парсер для Qwen3. Dual extraction (native + XML). |
+| `agent.py` | ~310 | Клас `ResearchAgent` зі streaming ReAct loop. `_stream_llm()` з look-ahead буфером для XML-safe streaming. Tool call budget enforcement + duplicate protection. `_ToolCallAccumulator` для tool call deltas. Dual extraction (native + XML fallback). |
 | `tools.py` | ~130 | Декоратор `@tool` — автогенерація JSON Schema з type hints + docstring. Три tool-функції. `TOOL_SCHEMAS` і `TOOL_REGISTRY` заповнюються автоматично при імпорті. |
 | `config.py` | ~100 | `Settings` (Pydantic BaseSettings) для завантаження з `.env`. `SYSTEM_PROMPT` зі структурованими секціями prompt engineering. |
 | `main.py` | ~70 | REPL: input loop, команди (exit/quit/new), виклик `agent.chat()`, error handling. |
@@ -353,10 +354,10 @@ System prompt структурований за секціями з викори
 |----------|-----------|
 | Tool кидає exception | `_execute_tool()` перехоплює, повертає `"Error executing {name}: {e}"` — модель бачить помилку і може адаптуватись |
 | Невідомий tool name | Повертає список доступних tools — модель може виправити виклик |
-| Tool call budget вичерпано | Автоматичний break з ReAct loop + nudge для фінальної відповіді |
-| Duplicate tool call | Пропускається з повідомленням моделі використати попередній результат |
+| Tool call budget вичерпано | Per-call check (після duplicate filter) + nudge для фінальної відповіді |
+| Duplicate tool call | Перевіряється ДО budget — не рахується в бюджет, повертає повідомлення моделі |
 | Ліміт ітерацій вичерпано | Вставляє nudge-повідомлення, робить останній LLM call для синтезу зібраної інформації |
-| XML теги в streaming | Буферизуються і не друкуються в stdout — парсяться після завершення стріму |
+| XML теги в streaming | Look-ahead буфер утримує часткові теги (`<tool`), парсить після стріму |
 | LLM API недоступний | Exception пробивається у REPL → `print(f"Error: {e}")` → користувач може спробувати знову |
 | `KeyboardInterrupt` | Перехоплюється в REPL → `"Interrupted"` → можна продовжити |
 
