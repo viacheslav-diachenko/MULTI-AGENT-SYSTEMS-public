@@ -10,6 +10,7 @@ import uuid
 import logging
 
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphRecursionError
 
 from agent import agent
 from config import Settings
@@ -25,9 +26,12 @@ logger.setLevel(logging.INFO)
 settings = Settings()
 
 # Unique thread_id per session for MemorySaver checkpointer
+# recursion_limit enforces max agent iterations (each iteration = LLM call + tool exec).
+# For a budget of N tool calls, set recursion_limit ≈ 2*N + 2 (accounts for
+# the agent node and tool node alternation in LangGraph's ReAct graph).
 THREAD_CONFIG = {
     "configurable": {"thread_id": uuid.uuid4().hex},
-    "recursion_limit": settings.max_iterations,
+    "recursion_limit": settings.max_tool_calls * 2 + 2,
 }
 
 
@@ -86,6 +90,12 @@ def main() -> None:
                         content_len = len(str(msg.content))
                         print(f"  ✅ [{tool_name}] → {content_len} chars")
 
+        except GraphRecursionError:
+            print(
+                f"\n⚠️  Tool call budget reached ({settings.max_tool_calls} calls). "
+                "The agent's partial findings are shown above. "
+                "Try a more specific question or increase MAX_TOOL_CALLS."
+            )
         except KeyboardInterrupt:
             print("\n--- Interrupted. You can continue or type 'exit'. ---")
         except Exception as e:
