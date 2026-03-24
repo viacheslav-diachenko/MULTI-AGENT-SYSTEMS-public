@@ -4,6 +4,31 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.2.0] - 2026-03-24
+
+### Додано
+
+- **Tool call budget enforcement** — `max_tool_calls=5` жорстко обмежує кількість
+  tool calls за один запит. Лічильник ведеться в ReAct loop, при досягненні ліміту
+  агент примусово генерує фінальну відповідь.
+- **Duplicate call protection** — повторні виклики того ж tool з ідентичними
+  аргументами пропускаються з інформативним повідомленням для моделі.
+- **Tool call counter в UX** — кожен tool call показує `(N/max)` лічильник.
+- `pytest>=8.0` до `requirements.txt`.
+- `.pytest_cache/` до `.gitignore`.
+
+### Змінено
+
+- `.env.example` — синхронізовано з `config.py`: додано `MAX_SEARCH_CONTENT_LENGTH`,
+  `MAX_TOOL_CALLS`.
+
+### Виправлено
+
+- **[P1] XML tool calls витікали в stdout при streaming** — для Qwen3/SGLang
+  бекендів сирі `<tool_call>` теги друкувались користувачу. Тепер `_stream_llm()`
+  буферизує контент після виявлення `<tool_call>` тегу: текст до XML друкується
+  в реальному часі, XML-частина накопичується мовчки і парситься після завершення.
+
 ## [1.1.0] - 2026-03-24
 
 ### Додано

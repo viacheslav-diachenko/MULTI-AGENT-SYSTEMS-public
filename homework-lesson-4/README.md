@@ -65,6 +65,12 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 7. **Покращений system prompt** — структурований за секціями (Role, Tools, Strategy,
    Format, Rules) з явними anti-patterns і обмеженнями поведінки.
 
+8. **Tool call budget enforcement** — жорсткий ліміт `max_tool_calls` (default: 5)
+   enforce-иться в коді, а не лише в prompt. Duplicate calls автоматично пропускаються.
+
+9. **XML-safe streaming** — `_stream_llm()` буферизує контент після виявлення
+   `<tool_call>` тегу, не допускаючи витоку сирого XML в stdout.
+
 ---
 
 ## Архітектура
@@ -224,7 +230,6 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
 ## Тестування
 
 ```bash
-pip install pytest
 python -m pytest test_agent_parser.py test_tool_decorator.py -v
 ```
 
@@ -348,7 +353,10 @@ System prompt структурований за секціями з викори
 |----------|-----------|
 | Tool кидає exception | `_execute_tool()` перехоплює, повертає `"Error executing {name}: {e}"` — модель бачить помилку і може адаптуватись |
 | Невідомий tool name | Повертає список доступних tools — модель може виправити виклик |
+| Tool call budget вичерпано | Автоматичний break з ReAct loop + nudge для фінальної відповіді |
+| Duplicate tool call | Пропускається з повідомленням моделі використати попередній результат |
 | Ліміт ітерацій вичерпано | Вставляє nudge-повідомлення, робить останній LLM call для синтезу зібраної інформації |
+| XML теги в streaming | Буферизуються і не друкуються в stdout — парсяться після завершення стріму |
 | LLM API недоступний | Exception пробивається у REPL → `print(f"Error: {e}")` → користувач може спробувати знову |
 | `KeyboardInterrupt` | Перехоплюється в REPL → `"Interrupted"` → можна продовжити |
 
@@ -363,6 +371,7 @@ System prompt структурований за секціями з викори
 | `trafilatura` | ≥2.0.0 | Витягування тексту зі сторінок |
 | `pydantic` | ≥2.12.0 | Валідація і серіалізація |
 | `pydantic-settings` | ≥2.12.0 | Завантаження конфігурації з .env |
+| `pytest` | ≥8.0 | Unit-тестування |
 
 **Видалені** (порівняно з lesson-3): `langgraph`, `langchain-openai`, `langchain-core`.
 

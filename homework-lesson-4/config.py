@@ -27,7 +27,10 @@ class Settings(BaseSettings):
     max_search_results: int = 5
     max_search_content_length: int = 4000
     max_url_content_length: int = 8000
+
+    # Agent iteration limits
     max_iterations: int = 15
+    max_tool_calls: int = 5
 
     # Output
     output_dir: str = "output"
