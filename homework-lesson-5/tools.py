@@ -48,7 +48,16 @@ def knowledge_search(query: str) -> str:
         score = doc.metadata.get("rerank_score", "n/a")
         results.append(f"[{i}] Source: {source}, Page {page} (score: {score})\n{doc.page_content}")
 
-    return "\n\n---\n\n".join(results)
+    output = "\n\n---\n\n".join(results)
+
+    # Context engineering: truncate knowledge search results
+    max_len = settings.max_knowledge_content_length
+    if len(output) > max_len:
+        output = output[:max_len] + (
+            f"\n\n[... TRUNCATED — showing first {max_len} of {len(output)} characters]"
+        )
+
+    return output
 
 
 @tool
@@ -79,7 +88,17 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
         snippet = r.get("body", r.get("snippet", ""))
         formatted.append(f"{i}. **{title}**\n   URL: {url}\n   {snippet}")
 
-    return "\n\n".join(formatted)
+    output = "\n\n".join(formatted)
+
+    # Context engineering: truncate search results to prevent context overflow
+    max_len = settings.max_search_content_length
+    if len(output) > max_len:
+        output = output[:max_len] + (
+            f"\n\n[... TRUNCATED — showing first {max_len} of {len(output)} characters. "
+            f"Use read_url on the most relevant URLs above for full content.]"
+        )
+
+    return output
 
 
 @tool

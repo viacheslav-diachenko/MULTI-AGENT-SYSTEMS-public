@@ -73,6 +73,7 @@ self-hosted інфраструктуру (без зовнішніх API).
 │  knowledge_search()     web_search()    read_url()   write_report()  │
 │  HybridRetriever        DDGS search     trafilatura   File I/O       │
 │  → ranked passages      → snippets      → full text   → .md file    │
+│  (≤6000 chars)          (≤4000 chars)   (≤8000 chars)                │
 └────────┬─────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -161,6 +162,7 @@ homework-lesson-5/
 ├── retriever.py         # HybridRetriever: FAISS + BM25 + Infinity reranker
 ├── ingest.py            # Ingestion pipeline: PDF → chunks → FAISS + BM25 JSON
 ├── tool_parser.py       # Qwen3ChatWrapper — XML tool call parser
+├── test_tool_parser.py  # Unit-тести для XML парсера (15 тестів)
 ├── config.py            # Pydantic Settings + SYSTEM_PROMPT
 ├── requirements.txt     # Залежності
 ├── .env                 # API endpoints (не комітити)
@@ -171,9 +173,11 @@ homework-lesson-5/
 │   └── retrieval-augmented-generation.pdf
 ├── index/               # Згенерований FAISS index + BM25 JSON (gitignored)
 ├── output/              # Згенеровані звіти агента (gitignored)
-└── example_output/
-    ├── report.md        # Приклад згенерованого звіту
-    └── demo_session.md  # Транскрипт демо-сесії
+├── example_output/
+│   ├── report.md        # Приклад згенерованого звіту
+│   └── demo_session.md  # Транскрипт демо-сесії
+├── CHANGELOG.md
+└── README.md
 ```
 
 ### Опис файлів
@@ -194,8 +198,8 @@ homework-lesson-5/
 
 | Tool | Призначення | Бібліотека / Сервіс |
 |------|-------------|---------------------|
-| `knowledge_search` | Гібридний пошук по локальній базі знань з reranking | FAISS + BM25 + Infinity reranker |
-| `web_search` | Пошук в інтернеті через DuckDuckGo | `ddgs` |
+| `knowledge_search` | Гібридний пошук по локальній базі знань з reranking (≤6000 chars) | FAISS + BM25 + Infinity reranker |
+| `web_search` | Пошук в інтернеті через DuckDuckGo (≤4000 chars) | `ddgs` |
 | `read_url` | Витягування тексту зі сторінки (≤8000 chars) | `trafilatura` |
 | `write_report` | Збереження Markdown-звіту у файл | `builtins (open)` |
 
@@ -217,6 +221,27 @@ homework-lesson-5/
 - **Приватність** — дані не виходять за межі кластера
 - **Потужніші embeddings** — Qwen3-Embedding-8B (4096 dims) vs text-embedding-3-small (1536 dims)
 - **Демонструє production підхід** — self-hosted infra замість залежності від зовнішніх сервісів
+
+---
+
+## Тестування
+
+```bash
+pip install pytest
+python -m pytest test_tool_parser.py -v
+```
+
+Тести покривають XML парсер (`parse_xml_tool_calls`):
+
+| Категорія | Що перевіряється |
+|---|---|
+| Happy path | один/кілька tool calls, один/кілька параметрів |
+| Змішаний контент | текст до/після XML-блоків |
+| Числовий парсинг | `"10"` → `int`, `"123abc"` → `str` |
+| Унікальність ID | кожен tool call має унікальний `call_*` |
+| Порожній ввід | `""`, звичайний текст без XML |
+| Malformed XML | незакритий тег, без параметрів, зламаний параметр |
+| Whitespace | компактний формат, зайві пробіли у значеннях |
 
 ---
 

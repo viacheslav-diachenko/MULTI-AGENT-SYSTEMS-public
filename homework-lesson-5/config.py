@@ -19,7 +19,11 @@ class Settings(BaseSettings):
 
     # Web search
     max_search_results: int = 5
+    max_search_content_length: int = 4000
     max_url_content_length: int = 8000
+
+    # RAG — Knowledge search
+    max_knowledge_content_length: int = 6000
 
     # RAG — Embeddings (TEI with OpenAI-compatible API)
     embedding_base_url: str = "http://10.43.45.148:7998/v1"
