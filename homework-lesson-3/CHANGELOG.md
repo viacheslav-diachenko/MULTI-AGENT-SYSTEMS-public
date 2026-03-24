@@ -4,6 +4,29 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.2.0] - 2026-03-24
+
+### Додано
+
+- **Tool call budget enforcement** — `max_tool_calls=5` в config, `recursion_limit`
+  обчислюється автоматично (`max_tool_calls * 2 + 2`). `GraphRecursionError`
+  перехоплюється з user-friendly повідомленням замість stack trace.
+- `pytest>=8.0` до `requirements.txt` — тести тепер працюють з базової установки.
+- `.pytest_cache/` до `.gitignore`.
+
+### Змінено
+
+- `max_iterations` знижено з 30 до 15 (більш розумний default).
+- `.env.example` — синхронізовано з `config.py`: додано `MAX_SEARCH_CONTENT_LENGTH`,
+  `MAX_TOOL_CALLS`, оновлено `MAX_ITERATIONS`.
+
+### Виправлено
+
+- **`Qwen3ChatWrapper` втрачала metadata** — при конвертації XML tool calls у
+  LangChain формат не зберігались `id`, `usage_metadata`, `additional_kwargs`
+  оригінального `AIMessage` та `generation_info` оригінального `ChatGeneration`.
+  Тепер всі поля forward-яться для коректного трейсингу і обліку токенів.
+
 ## [1.1.0] - 2026-03-24
 
 ### Додано

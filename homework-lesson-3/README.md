@@ -58,6 +58,9 @@ Markdown-звіт.
 - **Context engineering** — результати `web_search` (до 4000 символів) та
   `read_url` (до 8000 символів) обрізаються з інформативним повідомленням,
   щоб не забити контекстне вікно LLM. Ліміти конфігуруються окремо.
+- **Tool call budget** — жорсткий ліміт на кількість tool calls через
+  `max_tool_calls` → `recursion_limit`. `GraphRecursionError` перехоплюється
+  з user-friendly повідомленням.
 - **Pydantic Settings** — всі налаштування завантажуються з `.env` файлу,
   жодних хардкоджених значень.
 - **XML Tool Call Parser** (`tool_parser.py`) — обгортка над ChatOpenAI, яка
@@ -162,7 +165,6 @@ homework-lesson-3/
 ## Тестування
 
 ```bash
-pip install pytest
 python -m pytest test_tool_parser.py -v
 ```
 
@@ -196,3 +198,4 @@ python -m pytest test_tool_parser.py -v
 | `trafilatura` | ≥2.0.0 | Витягування тексту зі сторінок |
 | `pydantic` | ≥2.12.0 | Валідація та серіалізація |
 | `pydantic-settings` | ≥2.12.0 | Завантаження config із .env |
+| `pytest` | ≥8.0 | Unit-тестування |
