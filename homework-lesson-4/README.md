@@ -119,7 +119,7 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 │   web_search(query)        read_url(url)        write_report(f, c)   │
 │   └─ DDGS (DuckDuckGo)    └─ trafilatura        └─ File I/O         │
 │      → snippets + URLs       → full text            → .md file       │
-│                              (≤8000 chars)                           │
+│      (≤4000 chars)           (≤8000 chars)                           │
 └──────────────────────────────────────────────────────────────────────┘
                  │
                  ▼
@@ -171,17 +171,20 @@ User: "Порівняй naive RAG та sentence-window retrieval"
 
 ```
 homework-lesson-4/
-├── main.py              # Entry point — інтерактивний REPL
-├── agent.py             # ResearchAgent — custom ReAct loop + XML parser
-├── tools.py             # Tool функції + JSON Schema + TOOL_REGISTRY
-├── config.py            # Pydantic Settings + SYSTEM_PROMPT
-├── requirements.txt     # Залежності (без langgraph/langchain)
-├── .env.example         # Шаблон змінних середовища
+├── main.py                # Entry point — інтерактивний REPL
+├── agent.py               # ResearchAgent — custom ReAct loop + XML parser
+├── tools.py               # Tool функції + JSON Schema + TOOL_REGISTRY
+├── test_agent_parser.py   # Unit-тести для XML парсера (15 тестів)
+├── test_tool_decorator.py # Unit-тести для @tool декоратора (18 тестів)
+├── config.py              # Pydantic Settings + SYSTEM_PROMPT
+├── requirements.txt       # Залежності (без langgraph/langchain)
+├── .env.example           # Шаблон змінних середовища
 ├── .gitignore
-├── demo.gif             # Анімація демо-сесії
+├── demo.gif               # Анімація демо-сесії
 ├── example_output/
-│   ├── demo_session.md  # Повний вивід демо-сесії (tool calls + відповіді)
-│   └── report.md        # Чистий Markdown-контент відповідей агента
+│   ├── demo_session.md    # Повний вивід демо-сесії (tool calls + відповіді)
+│   └── report.md          # Чистий Markdown-контент відповідей агента
+├── CHANGELOG.md
 └── README.md
 ```
 
@@ -200,7 +203,7 @@ homework-lesson-4/
 
 | Tool | Призначення | JSON Schema params | Бібліотека |
 |------|-------------|-------------------|------------|
-| `web_search` | Пошук в інтернеті через DuckDuckGo | `query` (required), `max_results` (optional) | `ddgs` |
+| `web_search` | Пошук в інтернеті через DuckDuckGo (≤4000 chars) | `query` (required), `max_results` (optional) | `ddgs` |
 | `read_url` | Витягування тексту зі сторінки (≤8000 chars) | `url` (required) | `trafilatura` |
 | `write_report` | Збереження Markdown-звіту у файл | `filename` (required), `content` (required) | `builtins` |
 
@@ -215,6 +218,22 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
 
 Декоратор автоматично створює OpenAI JSON Schema і реєструє функцію в `TOOL_REGISTRY`.
 Немає ручних JSON-описів — додаєш функцію з `@tool`, і все працює.
+
+---
+
+## Тестування
+
+```bash
+pip install pytest
+python -m pytest test_agent_parser.py test_tool_decorator.py -v
+```
+
+**33 тести** покривають два ключові компоненти:
+
+| Файл | Тестів | Що перевіряється |
+|---|---|---|
+| `test_agent_parser.py` | 15 | XML парсер: happy path, malformed XML, edge cases, whitespace |
+| `test_tool_decorator.py` | 18 | `_resolve_json_type` (Optional[T] unwrapping), auto-schema generation, TOOL_REGISTRY |
 
 ---
 
