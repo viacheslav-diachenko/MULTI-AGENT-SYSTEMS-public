@@ -4,6 +4,43 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.3.0] - 2026-03-24
+
+### Додано
+
+- **Lazy retriever initialization** — `_retriever` ініціалізується при першому
+  виклику `knowledge_search`, а не при імпорті `tools.py`. Clean checkout без
+  `index/` тепер не падає при запуску — web_search/read_url працюють нормально,
+  а `knowledge_search` видає зрозуміле повідомлення "Run 'python ingest.py' first".
+- **`embedding_api_key`** в `config.py` — embedding API key тепер конфігурується
+  через `.env` (`EMBEDDING_API_KEY`), а не hardcoded `"not-needed"`.
+- **`filtered_rerank_top_n=10`** — при використанні metadata фільтрів reranker
+  повертає більше кандидатів (10 замість 3), щоб post-retrieval фільтрація
+  мала достатній пул.
+- Тест `test_shared_prefix_not_falsely_deduplicated` для нового dedup ключа.
+- `pytest>=8.0` до `requirements.txt`.
+- `.pytest_cache/` до `.gitignore`.
+
+### Змінено
+
+- **RRF dedup key** — замінено `page_content[:200]` на `md5(page_content)`.
+  Два чанки з однаковим вступом, але різним змістом тепер не схлопнуються.
+- `.env.example` — повністю синхронізовано з `config.py`: додано
+  `EMBEDDING_API_KEY`, `MAX_SEARCH_CONTENT_LENGTH`, `MAX_KNOWLEDGE_CONTENT_LENGTH`,
+  `FILTERED_RERANK_TOP_N`.
+
+### Виправлено
+
+- **[P1] Hardcoded `api_key="not-needed"` в embeddings** — `ingest.py` та
+  `retriever.py` тепер використовують `settings.embedding_api_key`. OpenAI
+  documented path (`API_KEY=sk-...`) тепер працює коректно.
+- **[P1] Post-retrieval filtering повертала "No results"** — при використанні
+  `source_filter`/`page_filter` reranker обрізав до top-3 ДО фільтрації.
+  Тепер при активних фільтрах reranker тимчасово повертає `filtered_rerank_top_n`
+  (default: 10) кандидатів.
+- **[P2] Import-time crash при відсутньому `index/`** — `get_retriever()`
+  викликався при імпорті `tools.py`, що ламало весь агент без попереднього ingestion.
+
 ## [1.2.0] - 2026-03-24
 
 ### Додано

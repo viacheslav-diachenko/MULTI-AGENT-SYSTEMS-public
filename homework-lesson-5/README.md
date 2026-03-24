@@ -228,11 +228,10 @@ homework-lesson-5/
 ## Тестування
 
 ```bash
-pip install pytest
 python -m pytest test_tool_parser.py test_retriever.py -v
 ```
 
-**29 тестів** покривають два ключові компоненти:
+**30 тестів** покривають два ключові компоненти:
 
 ### XML парсер (`test_tool_parser.py` — 15 тестів)
 
@@ -246,13 +245,13 @@ python -m pytest test_tool_parser.py test_retriever.py -v
 | Malformed XML | незакритий тег, без параметрів, зламаний параметр |
 | Whitespace | компактний формат, зайві пробіли у значеннях |
 
-### Reciprocal Rank Fusion (`test_retriever.py` — 14 тестів)
+### Reciprocal Rank Fusion (`test_retriever.py` — 15 тестів)
 
 | Категорія | Що перевіряється |
 |---|---|
 | RRF scoring | формула `1/(k + rank)`, сума з двох списків |
 | Multi-list merge | документ в обох списках має вищий score |
-| Deduplication | по `page_content[:200]` prefix |
+| Deduplication | identical content, shared-prefix collision resistance |
 | Параметр `k` | вплив на розподіл scores |
 | Edge cases | порожні списки, один список, metadata preservation |
 
@@ -439,6 +438,7 @@ Goodbye!
 | `trafilatura` | ≥2.0.0 | Web page text extraction |
 | `pydantic` | ≥2.12.0 | Validation and serialization |
 | `pydantic-settings` | ≥2.12.0 | Config from .env |
+| `pytest` | ≥8.0 | Unit-тестування |
 
 **Не потрібні** (порівняно з типовим RAG): `sentence-transformers` — reranking виконується
 сервером (Infinity API), а не локально.

@@ -4,6 +4,7 @@ Combines semantic search (FAISS) + BM25 (lexical) with Reciprocal Rank Fusion
 (RRF) scoring and Infinity reranker.
 """
 
+import hashlib
 import json
 import os
 import logging
@@ -83,7 +84,9 @@ def reciprocal_rank_fusion(
 
     for ranked_docs in ranked_lists:
         for rank, doc in enumerate(ranked_docs, start=1):
-            content_key = doc.page_content[:200]
+            # Use hash of full content to avoid false collisions from shared prefixes
+            # (e.g. PDF chunks with identical headers or repeated introductions)
+            content_key = hashlib.md5(doc.page_content.encode()).hexdigest()
             scores[content_key] = scores.get(content_key, 0.0) + 1.0 / (k + rank)
             # Keep the first occurrence (preserves original metadata)
             if content_key not in doc_map:
@@ -148,7 +151,7 @@ def get_retriever() -> HybridRetriever:
     # Load FAISS
     embeddings = OpenAIEmbeddings(
         base_url=settings.embedding_base_url,
-        api_key="not-needed",
+        api_key=settings.embedding_api_key.get_secret_value(),
         model=settings.embedding_model,
     )
     vectorstore = FAISS.load_local(

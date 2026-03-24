@@ -54,7 +54,7 @@ def ingest() -> None:
     # 3. Build FAISS index with TEI embeddings (OpenAI-compatible API)
     embeddings = OpenAIEmbeddings(
         base_url=settings.embedding_base_url,
-        api_key="not-needed",
+        api_key=settings.embedding_api_key.get_secret_value(),
         model=settings.embedding_model,
         chunk_size=200,  # TEI max batch size is 256
     )

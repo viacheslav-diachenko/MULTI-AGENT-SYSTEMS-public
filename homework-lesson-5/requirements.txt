@@ -11,3 +11,4 @@ pypdf
 pydantic>=2.12.0
 pydantic-settings>=2.12.0
 httpx
+pytest>=8.0

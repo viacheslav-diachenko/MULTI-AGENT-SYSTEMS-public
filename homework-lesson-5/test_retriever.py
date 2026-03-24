@@ -69,7 +69,7 @@ class TestReciprocalRankFusion:
 
     # --- Deduplication ---
 
-    def test_deduplicates_by_content_prefix(self):
+    def test_deduplicates_identical_content(self):
         list1 = [_doc("same content here", source="a.pdf")]
         list2 = [_doc("same content here", source="b.pdf")]
         result = reciprocal_rank_fusion([list1, list2])
@@ -81,6 +81,15 @@ class TestReciprocalRankFusion:
     def test_different_content_not_deduplicated(self):
         list1 = [_doc("content A")]
         list2 = [_doc("content B")]
+        result = reciprocal_rank_fusion([list1, list2])
+
+        assert len(result) == 2
+
+    def test_shared_prefix_not_falsely_deduplicated(self):
+        """Chunks with same prefix but different content should NOT collide."""
+        shared_prefix = "Introduction to RAG systems. " * 20  # >200 chars
+        list1 = [_doc(shared_prefix + "Chunk A details about vector search.")]
+        list2 = [_doc(shared_prefix + "Chunk B details about BM25 scoring.")]
         result = reciprocal_rank_fusion([list1, list2])
 
         assert len(result) == 2

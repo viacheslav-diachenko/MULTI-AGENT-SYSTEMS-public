@@ -17,8 +17,24 @@ from retriever import get_retriever
 logger = logging.getLogger(__name__)
 settings = Settings()
 
-# Initialize hybrid retriever (loads FAISS + BM25 from disk)
-_retriever = get_retriever()
+# Lazy retriever — initialized on first knowledge_search call, not at import time.
+# This prevents ImportError/FileNotFoundError when index/ hasn't been built yet,
+# allowing the rest of the agent (web_search, read_url) to still work.
+_retriever = None
+
+
+def _get_or_init_retriever():
+    """Lazily initialize the hybrid retriever on first use."""
+    global _retriever
+    if _retriever is None:
+        try:
+            _retriever = get_retriever()
+        except Exception as e:
+            raise RuntimeError(
+                f"Knowledge base not available: {e}. "
+                "Run 'python ingest.py' first to build the index."
+            ) from e
+    return _retriever
 
 
 @tool
@@ -47,8 +63,21 @@ def knowledge_search(
             (e.g. "langchain" matches "langchain.pdf").
         page_filter: Optional page number to filter results (0-indexed).
     """
+    has_filters = source_filter is not None or page_filter is not None
+
     try:
-        docs = _retriever.invoke(query)
+        retriever = _get_or_init_retriever()
+        if has_filters:
+            # When filters are active, temporarily increase rerank_top_n so that
+            # post-retrieval filtering has a larger pool to choose from.
+            original_top_n = retriever.reranker.top_n
+            retriever.reranker.top_n = settings.filtered_rerank_top_n
+            try:
+                docs = retriever.invoke(query)
+            finally:
+                retriever.reranker.top_n = original_top_n
+        else:
+            docs = retriever.invoke(query)
     except Exception as e:
         logger.warning("knowledge_search failed: %s", e)
         return f"Knowledge base search failed: {e}"
