@@ -38,7 +38,7 @@ Markdown-звіт.
 │  web_search()          read_url()          write_report()       │
 │  DuckDuckGo search     trafilatura          File I/O            │
 │  → snippets + URLs     → full text          → Markdown file     │
-│                        (truncated)                              │
+│  (truncated 4K)        (truncated 8K)                           │
 └─────────────────────────────────────────────────────────────────┘
               │
               ▼
@@ -55,8 +55,9 @@ Markdown-звіт.
   з LangChain, замість застарілого `AgentExecutor`.
 - **`MemorySaver` checkpointer** — зберігає історію діалогу між повідомленнями
   в межах сесії через `thread_id`.
-- **Context engineering** — результати `read_url` обрізаються до 8000 символів,
-  щоб не забити контекстне вікно LLM.
+- **Context engineering** — результати `web_search` (до 4000 символів) та
+  `read_url` (до 8000 символів) обрізаються з інформативним повідомленням,
+  щоб не забити контекстне вікно LLM. Ліміти конфігуруються окремо.
 - **Pydantic Settings** — всі налаштування завантажуються з `.env` файлу,
   жодних хардкоджених значень.
 - **XML Tool Call Parser** (`tool_parser.py`) — обгортка над ChatOpenAI, яка
@@ -146,6 +147,7 @@ homework-lesson-3/
 ├── agent.py             # Збірка агента (LLM + tools + memory)
 ├── tools.py             # Визначення та реалізація інструментів
 ├── tool_parser.py       # XML tool call parser для Qwen3.5 моделей
+├── test_tool_parser.py  # Unit-тести для XML парсера (15 тестів)
 ├── config.py            # Pydantic Settings + system prompt
 ├── requirements.txt     # Залежності з версіями
 ├── .env.example         # Шаблон змінних середовища
@@ -153,8 +155,28 @@ homework-lesson-3/
 ├── example_output/
 │   ├── report.md        # Приклад згенерованого звіту
 │   └── demo_session.md  # Транскрипт демо-сесії
+├── CHANGELOG.md
 └── README.md
 ```
+
+## Тестування
+
+```bash
+pip install pytest
+python -m pytest test_tool_parser.py -v
+```
+
+Тести покривають XML парсер (`parse_xml_tool_calls`):
+
+| Категорія | Що перевіряється |
+|---|---|
+| Happy path | один/кілька tool calls, один/кілька параметрів |
+| Змішаний контент | текст до/після XML-блоків |
+| Числовий парсинг | `"10"` → `int`, `"123abc"` → `str` |
+| Унікальність ID | кожен tool call має унікальний `call_*` |
+| Порожній ввід | `""`, звичайний текст без XML |
+| Malformed XML | незакритий тег, без параметрів, зламаний параметр |
+| Whitespace | компактний формат, зайві пробіли у значеннях |
 
 ## Інструменти агента
 
