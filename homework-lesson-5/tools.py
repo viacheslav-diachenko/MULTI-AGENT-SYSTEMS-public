@@ -22,15 +22,30 @@ _retriever = get_retriever()
 
 
 @tool
-def knowledge_search(query: str) -> str:
-    """Search the local knowledge base using hybrid retrieval with reranking.
+def knowledge_search(
+    query: str,
+    source_filter: Optional[str] = None,
+    page_filter: Optional[int] = None,
+) -> str:
+    """Search the local knowledge base about RAG, LLMs, and LangChain.
 
-    Use this tool to find information from ingested documents about RAG,
-    LLMs, LangChain, and related AI topics. Returns the most relevant
-    passages with source metadata.
+    The knowledge base contains these ingested PDF documents:
+    - retrieval-augmented-generation.pdf — the original RAG paper
+    - large-language-model.pdf — overview of LLM architectures
+    - langchain.pdf — LangChain framework documentation
+
+    Use this tool FIRST for questions about retrieval, embeddings, vector
+    databases, chunking, reranking, LLM architectures, or LangChain.
+    Use web_search instead for current events, recent developments (2025+),
+    or topics not covered by the documents above.
+
+    You can narrow results by source file or page number using optional filters.
 
     Args:
         query: The search query string.
+        source_filter: Optional filename substring to filter results
+            (e.g. "langchain" matches "langchain.pdf").
+        page_filter: Optional page number to filter results (0-indexed).
     """
     try:
         docs = _retriever.invoke(query)
@@ -40,6 +55,22 @@ def knowledge_search(query: str) -> str:
 
     if not docs:
         return "No relevant documents found in the knowledge base. Try web_search instead."
+
+    # Apply metadata filters (post-retrieval)
+    if source_filter:
+        source_lower = source_filter.lower()
+        docs = [
+            d for d in docs
+            if source_lower in os.path.basename(d.metadata.get("source", "")).lower()
+        ]
+    if page_filter is not None:
+        docs = [d for d in docs if d.metadata.get("page") == page_filter]
+
+    if not docs:
+        return (
+            f"No results after filtering (source={source_filter!r}, page={page_filter}). "
+            "Try a broader query or remove filters."
+        )
 
     results = []
     for i, doc in enumerate(docs, 1):

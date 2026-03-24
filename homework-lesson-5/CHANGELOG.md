@@ -4,6 +4,29 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.2.0] - 2026-03-24
+
+### Додано
+
+- **Reciprocal Rank Fusion (RRF)** в `HybridRetriever` — замість простого
+  concat+dedup тепер використовується RRF scoring: `RRF(d) = Σ 1/(k + rank_i(d))`.
+  Документи, знайдені обома retriever'ами (FAISS + BM25), отримують вищий score.
+  RRF score зберігається в metadata для transparency. Константа `rrf_k=60` (стандарт).
+- **Metadata filtering в `knowledge_search`** — нові optional параметри:
+  `source_filter` (substring match по filename) та `page_filter` (exact match).
+  Фільтрація post-retrieval, до форматування виводу.
+- **Unit-тести для RRF** (`test_retriever.py`) — 14 тестів: scoring formula,
+  deduplication, multi-list merge, edge cases, metadata preservation.
+
+### Змінено
+
+- **Tool description для `knowledge_search`** — значно розширено для кращого
+  agent routing (Cell 33 lesson-5: "Tool Description — це промпт для агента!").
+  Тепер описує конкретні документи в базі, теми, коли використовувати vs web_search,
+  та можливості фільтрації.
+- `README.md` — оновлено секцію Hybrid Search (RRF замість simple merge),
+  таблицю інструментів (metadata filtering parameters), структуру проєкту.
+
 ## [1.1.0] - 2026-03-24
 
 ### Додано

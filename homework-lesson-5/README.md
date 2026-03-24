@@ -85,9 +85,9 @@ self-hosted інфраструктуру (без зовнішніх API).
 │   │  (semantic)    │  │ (keywords)   │  │  (cross-encoder HTTP)  │   │
 │   └───────┬────────┘  └──────┬───────┘  └───────────┬────────────┘   │
 │           │                  │                      │                │
-│           └──── merge + dedup ──────────────────────┘                │
+│           └── Reciprocal Rank Fusion (RRF) ────────┘                │
 │                        │                                             │
-│              top_k → rerank → top_n                                  │
+│              RRF scored → rerank → top_n                             │
 └──────────────────────────────────────────────────────────────────────┘
          │                                  │
          ▼                                  ▼
@@ -159,7 +159,8 @@ homework-lesson-5/
 ├── main.py              # Entry point — інтерактивний REPL зі streaming
 ├── agent.py             # LangGraph ReAct agent (4 tools + memory)
 ├── tools.py             # knowledge_search, web_search, read_url, write_report
-├── retriever.py         # HybridRetriever: FAISS + BM25 + Infinity reranker
+├── retriever.py         # HybridRetriever: FAISS + BM25 + RRF + Infinity reranker
+├── test_retriever.py    # Unit-тести для RRF (14 тестів)
 ├── ingest.py            # Ingestion pipeline: PDF → chunks → FAISS + BM25 JSON
 ├── tool_parser.py       # Qwen3ChatWrapper — XML tool call parser
 ├── test_tool_parser.py  # Unit-тести для XML парсера (15 тестів)
@@ -185,7 +186,7 @@ homework-lesson-5/
 | Файл | Відповідальність |
 |------|------------------|
 | `ingest.py` | Завантажує PDF з `data/`, розбиває на чанки, генерує embeddings через TEI, зберігає FAISS індекс + BM25 JSON на диск. |
-| `retriever.py` | `HybridRetriever` — FAISS semantic + BM25 lexical, дедуплікація, reranking через `InfinityReranker` (HTTP client для Infinity API). |
+| `retriever.py` | `HybridRetriever` — FAISS semantic + BM25 lexical, Reciprocal Rank Fusion (RRF), reranking через `InfinityReranker` (HTTP client для Infinity API). |
 | `tools.py` | 4 tool-функції з `@tool` декоратором LangChain. `knowledge_search` обгортає HybridRetriever. |
 | `agent.py` | Збирає LangGraph ReAct agent: ChatOpenAI → Qwen3ChatWrapper → create_react_agent з 4 tools + MemorySaver. |
 | `tool_parser.py` | Перехоплює XML tool calls від Qwen3.5 моделей і конвертує в LangChain формат (з hw3). |
@@ -198,7 +199,7 @@ homework-lesson-5/
 
 | Tool | Призначення | Бібліотека / Сервіс |
 |------|-------------|---------------------|
-| `knowledge_search` | Гібридний пошук по локальній базі знань з reranking (≤6000 chars) | FAISS + BM25 + Infinity reranker |
+| `knowledge_search` | Гібридний пошук по базі знань з RRF + reranking (≤6000 chars). Optional: `source_filter`, `page_filter` | FAISS + BM25 + RRF + Infinity reranker |
 | `web_search` | Пошук в інтернеті через DuckDuckGo (≤4000 chars) | `ddgs` |
 | `read_url` | Витягування тексту зі сторінки (≤8000 chars) | `trafilatura` |
 | `write_report` | Збереження Markdown-звіту у файл | `builtins (open)` |
@@ -228,10 +229,12 @@ homework-lesson-5/
 
 ```bash
 pip install pytest
-python -m pytest test_tool_parser.py -v
+python -m pytest test_tool_parser.py test_retriever.py -v
 ```
 
-Тести покривають XML парсер (`parse_xml_tool_calls`):
+**29 тестів** покривають два ключові компоненти:
+
+### XML парсер (`test_tool_parser.py` — 15 тестів)
 
 | Категорія | Що перевіряється |
 |---|---|
@@ -242,6 +245,16 @@ python -m pytest test_tool_parser.py -v
 | Порожній ввід | `""`, звичайний текст без XML |
 | Malformed XML | незакритий тег, без параметрів, зламаний параметр |
 | Whitespace | компактний формат, зайві пробіли у значеннях |
+
+### Reciprocal Rank Fusion (`test_retriever.py` — 14 тестів)
+
+| Категорія | Що перевіряється |
+|---|---|
+| RRF scoring | формула `1/(k + rank)`, сума з двох списків |
+| Multi-list merge | документ в обох списках має вищий score |
+| Deduplication | по `page_content[:200]` prefix |
+| Параметр `k` | вплив на розподіл scores |
+| Edge cases | порожні списки, один список, metadata preservation |
 
 ---
 
@@ -380,9 +393,9 @@ Goodbye!
     │ top_k = 10    │           │ top_k = 10    │
     └───────┬───────┘           └───────┬───────┘
             │                           │
-            └──────── merge ────────────┘
+            └─── Reciprocal Rank Fusion ─┘
                        │
-                ~15 unique docs
+             ~15 unique docs (RRF scored)
                        │
                        ▼
               ┌────────────────┐

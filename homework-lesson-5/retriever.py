@@ -1,6 +1,7 @@
 """Hybrid retrieval module.
 
-Combines semantic search (FAISS) + BM25 (lexical) with Infinity reranker.
+Combines semantic search (FAISS) + BM25 (lexical) with Reciprocal Rank Fusion
+(RRF) scoring and Infinity reranker.
 """
 
 import json
@@ -57,14 +58,58 @@ class InfinityReranker:
         return reranked
 
 
+def reciprocal_rank_fusion(
+    ranked_lists: list[list[Document]],
+    k: int = 60,
+) -> list[Document]:
+    """Merge multiple ranked lists using Reciprocal Rank Fusion (RRF).
+
+    RRF assigns each document a score: RRF(d) = Σ 1/(k + rank_i(d))
+    where k is a constant (default 60) and rank_i is the 1-based rank
+    of document d in the i-th list. Documents found by multiple retrievers
+    accumulate higher scores.
+
+    Args:
+        ranked_lists: List of ranked document lists from different retrievers.
+        k: RRF constant that controls how much rank position matters.
+            Higher k → more uniform scores; lower k → top ranks dominate.
+
+    Returns:
+        Deduplicated list of documents sorted by RRF score (descending).
+        Each document has 'rrf_score' in its metadata.
+    """
+    scores: dict[str, float] = {}
+    doc_map: dict[str, Document] = {}
+
+    for ranked_docs in ranked_lists:
+        for rank, doc in enumerate(ranked_docs, start=1):
+            content_key = doc.page_content[:200]
+            scores[content_key] = scores.get(content_key, 0.0) + 1.0 / (k + rank)
+            # Keep the first occurrence (preserves original metadata)
+            if content_key not in doc_map:
+                doc_map[content_key] = doc
+
+    # Sort by RRF score descending
+    sorted_keys = sorted(scores, key=lambda key: scores[key], reverse=True)
+
+    result = []
+    for key in sorted_keys:
+        doc = doc_map[key]
+        doc.metadata["rrf_score"] = round(scores[key], 6)
+        result.append(doc)
+
+    return result
+
+
 class HybridRetriever(BaseRetriever):
-    """Ensemble retriever: FAISS semantic + BM25 lexical + Infinity reranker."""
+    """Ensemble retriever: FAISS semantic + BM25 lexical + RRF + Infinity reranker."""
 
     vectorstore: FAISS
     bm25: BM25Retriever
     reranker: InfinityReranker
     semantic_k: int = 10
     bm25_k: int = 10
+    rrf_k: int = 60
 
     class Config:
         arbitrary_types_allowed = True
@@ -81,17 +126,14 @@ class HybridRetriever(BaseRetriever):
         # 2. BM25 search
         bm25_docs = self.bm25.invoke(query)
 
-        # 3. Merge and deduplicate (by page_content prefix)
-        seen = set()
-        merged = []
-        for doc in semantic_docs + bm25_docs:
-            content_key = doc.page_content[:200]
-            if content_key not in seen:
-                seen.add(content_key)
-                merged.append(doc)
+        # 3. Reciprocal Rank Fusion — documents found by both retrievers
+        #    get higher scores than those found by only one
+        merged = reciprocal_rank_fusion(
+            [semantic_docs, bm25_docs], k=self.rrf_k,
+        )
 
         logger.info(
-            "Hybrid search: %d semantic + %d BM25 → %d unique → reranking",
+            "Hybrid search: %d semantic + %d BM25 → %d unique (RRF) → reranking",
             len(semantic_docs), len(bm25_docs), len(merged),
         )
 
