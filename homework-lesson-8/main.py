@@ -12,7 +12,7 @@ import logging
 from langgraph.types import Command, Interrupt
 
 from config import Settings
-from supervisor import reset_revision_counter, supervisor
+from supervisor import reset_revision_counter, set_active_thread, supervisor
 
 # Configure logging — suppress library noise
 logging.basicConfig(
@@ -191,7 +191,8 @@ def main() -> None:
             continue
 
         logger.info("User query: %s", user_input)
-        reset_revision_counter()
+        set_active_thread(thread_id)
+        reset_revision_counter(thread_id)
 
         try:
             for step in supervisor.stream(

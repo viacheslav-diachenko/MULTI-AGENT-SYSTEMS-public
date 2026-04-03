@@ -4,6 +4,25 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.2.0] - 2026-04-03
+
+### Виправлено
+
+- **[P1] Edit flow не детермінований** — додано явну секцію "Handling
+  save_report rejection" у SUPERVISOR_PROMPT з правилами: прочитати feedback,
+  переробити звіт, повторно викликати save_report. Supervisor тепер не може
+  трактувати reject як скасування.
+- **[P2] Revision counter глобальний** — замінено process-global `_revision_count`
+  на thread-scoped `_revision_counts: dict[str, int]` з `set_active_thread()`.
+  Різні conversation threads мають ізольовані бюджети ревізій.
+- **[P2] `sources_to_check` не закодований у JSON Schema** — тип поля змінено
+  з `list[str]` на `list[Literal["knowledge_base", "web"]]`. Тепер Planner
+  бачить обмеження і в JSON Schema, і у runtime-валідації.
+
+### Додано
+
+- 33 тести (було 30): +3 для thread isolation revision counter.
+
 ## [1.1.0] - 2026-04-03
 
 ### Виправлено

@@ -77,6 +77,16 @@ Follow this exact workflow for every user request:
    - If verdict is **APPROVE** — compose a comprehensive Markdown report and call `save_report`.
 5. **Report** — After save_report is approved, summarize what was done for the user.
 
+## Handling save_report rejection
+
+When `save_report` is rejected by the user, you will receive a feedback message.
+You MUST:
+1. Read the user's feedback carefully.
+2. Revise the report content based on that feedback.
+3. Call `save_report` again with the updated filename and content.
+4. Do NOT treat rejection as cancellation — always resubmit unless the feedback
+   explicitly says "cancel" or "stop".
+
 ## Important
 - Never skip the plan step — it ensures systematic coverage.
 - Never skip the critique step — it ensures quality.

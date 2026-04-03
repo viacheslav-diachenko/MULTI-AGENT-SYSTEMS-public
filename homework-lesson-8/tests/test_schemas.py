@@ -38,7 +38,7 @@ class TestResearchPlan:
 
     def test_plan_invalid_source_rejected(self):
         """sources_to_check must only contain 'knowledge_base' or 'web'."""
-        with pytest.raises(Exception, match="Invalid sources"):
+        with pytest.raises(Exception):
             ResearchPlan(
                 goal="Test",
                 search_queries=["query"],

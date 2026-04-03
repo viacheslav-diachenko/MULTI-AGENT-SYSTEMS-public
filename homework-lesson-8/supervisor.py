@@ -24,15 +24,35 @@ from tools import save_report as _save_report_tool
 logger = logging.getLogger(__name__)
 settings = Settings()
 
-# Revision counter — enforced in code, not just in the prompt.
-# Reset before each new user query in main.py via reset_revision_counter().
-_revision_count = 0
+# Thread-scoped revision counters — keyed by thread_id so conversations
+# don't interfere with each other and budgets survive checkpoint/resume.
+_revision_counts: dict[str, int] = {}
+
+# Active thread_id — set by main.py before each supervisor.stream() call.
+_active_thread_id: str = ""
 
 
-def reset_revision_counter() -> None:
-    """Reset the revision counter. Call before each new user query."""
-    global _revision_count
-    _revision_count = 0
+def set_active_thread(thread_id: str) -> None:
+    """Set the active thread_id. Call before each supervisor invocation."""
+    global _active_thread_id
+    _active_thread_id = thread_id
+
+
+def reset_revision_counter(thread_id: str) -> None:
+    """Reset the revision counter for a specific thread."""
+    _revision_counts[thread_id] = 0
+
+
+def _get_revision_count() -> int:
+    """Get the current revision count for the active thread."""
+    return _revision_counts.get(_active_thread_id, 0)
+
+
+def _increment_revision_count() -> int:
+    """Increment and return the revision count for the active thread."""
+    count = _revision_counts.get(_active_thread_id, 0) + 1
+    _revision_counts[_active_thread_id] = count
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -72,18 +92,17 @@ def research(request: str) -> str:
     Args:
         request: Research plan or revision instructions to execute.
     """
-    global _revision_count
-    _revision_count += 1
+    count = _increment_revision_count()
     max_rounds = settings.max_revision_rounds + 1  # first call + N revisions
 
-    if _revision_count > max_rounds:
+    if count > max_rounds:
         return (
             f"REVISION LIMIT REACHED ({settings.max_revision_rounds} revision rounds). "
             "You must proceed with the current findings. Call save_report now."
         )
 
-    if _revision_count > 1:
-        logger.info("Research revision round %d/%d", _revision_count - 1, settings.max_revision_rounds)
+    if count > 1:
+        logger.info("Research revision round %d/%d", count - 1, settings.max_revision_rounds)
 
     result = research_agent.invoke(
         {"messages": [{"role": "user", "content": request}]}

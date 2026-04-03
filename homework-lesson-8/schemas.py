@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-ALLOWED_SOURCES = {"knowledge_base", "web"}
+SourceType = Literal["knowledge_base", "web"]
 
 
 class ResearchPlan(BaseModel):
@@ -18,7 +18,7 @@ class ResearchPlan(BaseModel):
     search_queries: list[str] = Field(
         description="Specific queries to execute (at least one)",
     )
-    sources_to_check: list[str] = Field(
+    sources_to_check: list[SourceType] = Field(
         description="Where to search: 'knowledge_base', 'web', or both",
     )
     output_format: str = Field(
@@ -34,12 +34,7 @@ class ResearchPlan(BaseModel):
 
     @field_validator("sources_to_check")
     @classmethod
-    def valid_sources(cls, v: list[str]) -> list[str]:
-        invalid = set(v) - ALLOWED_SOURCES
-        if invalid:
-            raise ValueError(
-                f"Invalid sources: {invalid}. Allowed: {ALLOWED_SOURCES}"
-            )
+    def at_least_one_source(cls, v: list[SourceType]) -> list[SourceType]:
         if not v:
             raise ValueError("sources_to_check must contain at least one source")
         return v
