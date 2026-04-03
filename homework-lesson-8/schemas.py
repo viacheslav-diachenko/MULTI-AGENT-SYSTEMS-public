@@ -6,7 +6,9 @@ CritiqueResult — returned by Critic Agent.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+ALLOWED_SOURCES = {"knowledge_base", "web"}
 
 
 class ResearchPlan(BaseModel):
@@ -28,6 +30,18 @@ class ResearchPlan(BaseModel):
     def at_least_one_query(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("search_queries must contain at least one query")
+        return v
+
+    @field_validator("sources_to_check")
+    @classmethod
+    def valid_sources(cls, v: list[str]) -> list[str]:
+        invalid = set(v) - ALLOWED_SOURCES
+        if invalid:
+            raise ValueError(
+                f"Invalid sources: {invalid}. Allowed: {ALLOWED_SOURCES}"
+            )
+        if not v:
+            raise ValueError("sources_to_check must contain at least one source")
         return v
 
 
@@ -55,3 +69,21 @@ class CritiqueResult(BaseModel):
     revision_requests: list[str] = Field(
         description="Specific things to fix if verdict is REVISE",
     )
+
+    @model_validator(mode="after")
+    def check_verdict_consistency(self) -> "CritiqueResult":
+        """Ensure verdict is consistent with dimension flags and revision_requests."""
+        if self.verdict == "APPROVE" and not (
+            self.is_fresh and self.is_complete and self.is_well_structured
+        ):
+            raise ValueError(
+                "verdict is APPROVE but not all dimensions are True "
+                f"(fresh={self.is_fresh}, complete={self.is_complete}, "
+                f"structured={self.is_well_structured})"
+            )
+        if self.verdict == "REVISE" and not self.revision_requests:
+            raise ValueError(
+                "verdict is REVISE but revision_requests is empty — "
+                "Critic must specify what to fix"
+            )
+        return self

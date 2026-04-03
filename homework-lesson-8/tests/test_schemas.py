@@ -36,6 +36,34 @@ class TestResearchPlan:
                 output_format="report",
             )
 
+    def test_plan_invalid_source_rejected(self):
+        """sources_to_check must only contain 'knowledge_base' or 'web'."""
+        with pytest.raises(Exception, match="Invalid sources"):
+            ResearchPlan(
+                goal="Test",
+                search_queries=["query"],
+                sources_to_check=["database"],
+                output_format="report",
+            )
+
+    def test_plan_empty_sources_rejected(self):
+        with pytest.raises(Exception):
+            ResearchPlan(
+                goal="Test",
+                search_queries=["query"],
+                sources_to_check=[],
+                output_format="report",
+            )
+
+    def test_plan_single_source_knowledge_base(self):
+        plan = ResearchPlan(
+            goal="Test",
+            search_queries=["query"],
+            sources_to_check=["knowledge_base"],
+            output_format="report",
+        )
+        assert plan.sources_to_check == ["knowledge_base"]
+
 
 class TestCritiqueResult:
     def test_approve_verdict(self):
@@ -89,3 +117,44 @@ class TestCritiqueResult:
         json_str = result.model_dump_json()
         restored = CritiqueResult.model_validate_json(json_str)
         assert restored == result
+
+    def test_approve_with_failed_dimension_rejected(self):
+        """APPROVE verdict requires all is_* flags to be True."""
+        with pytest.raises(Exception, match="verdict is APPROVE"):
+            CritiqueResult(
+                verdict="APPROVE",
+                is_fresh=False,
+                is_complete=True,
+                is_well_structured=True,
+                strengths=["Some strength"],
+                gaps=["Stale data"],
+                revision_requests=[],
+            )
+
+    def test_revise_without_revision_requests_rejected(self):
+        """REVISE verdict requires non-empty revision_requests."""
+        with pytest.raises(Exception, match="revision_requests is empty"):
+            CritiqueResult(
+                verdict="REVISE",
+                is_fresh=False,
+                is_complete=True,
+                is_well_structured=True,
+                strengths=[],
+                gaps=["Stale data"],
+                revision_requests=[],
+            )
+
+    def test_revise_all_dimensions_failed(self):
+        result = CritiqueResult(
+            verdict="REVISE",
+            is_fresh=False,
+            is_complete=False,
+            is_well_structured=False,
+            strengths=[],
+            gaps=["Everything outdated", "Missing topics", "Bad structure"],
+            revision_requests=["Redo the entire research"],
+        )
+        assert result.verdict == "REVISE"
+        assert not result.is_fresh
+        assert not result.is_complete
+        assert not result.is_well_structured

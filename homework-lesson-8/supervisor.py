@@ -24,6 +24,16 @@ from tools import save_report as _save_report_tool
 logger = logging.getLogger(__name__)
 settings = Settings()
 
+# Revision counter — enforced in code, not just in the prompt.
+# Reset before each new user query in main.py via reset_revision_counter().
+_revision_count = 0
+
+
+def reset_revision_counter() -> None:
+    """Reset the revision counter. Call before each new user query."""
+    global _revision_count
+    _revision_count = 0
+
 
 # ---------------------------------------------------------------------------
 # Agent-as-Tool wrappers — Supervisor sees only these 4 high-level tools
@@ -62,6 +72,19 @@ def research(request: str) -> str:
     Args:
         request: Research plan or revision instructions to execute.
     """
+    global _revision_count
+    _revision_count += 1
+    max_rounds = settings.max_revision_rounds + 1  # first call + N revisions
+
+    if _revision_count > max_rounds:
+        return (
+            f"REVISION LIMIT REACHED ({settings.max_revision_rounds} revision rounds). "
+            "You must proceed with the current findings. Call save_report now."
+        )
+
+    if _revision_count > 1:
+        logger.info("Research revision round %d/%d", _revision_count - 1, settings.max_revision_rounds)
+
     result = research_agent.invoke(
         {"messages": [{"role": "user", "content": request}]}
     )
@@ -69,17 +92,27 @@ def research(request: str) -> str:
 
 
 @tool
-def critique(findings: str) -> str:
+def critique(original_request: str, plan_summary: str, findings: str) -> str:
     """Evaluate research findings for freshness, completeness, and structure.
 
     The Critic Agent will independently verify claims using the same tools,
     then return a structured verdict (APPROVE or REVISE) with specific feedback.
 
+    IMPORTANT: You must provide the original user request and plan summary
+    so the Critic can evaluate completeness against the actual question.
+
     Args:
+        original_request: The user's original research question.
+        plan_summary: Brief summary of the research plan (goal + queries).
         findings: The research findings to evaluate.
     """
+    prompt = (
+        f"## Original User Request\n{original_request}\n\n"
+        f"## Research Plan\n{plan_summary}\n\n"
+        f"## Research Findings to Evaluate\n{findings}"
+    )
     result = critic_agent.invoke(
-        {"messages": [{"role": "user", "content": findings}]}
+        {"messages": [{"role": "user", "content": prompt}]}
     )
     structured = result.get("structured_response")
     if structured is not None:

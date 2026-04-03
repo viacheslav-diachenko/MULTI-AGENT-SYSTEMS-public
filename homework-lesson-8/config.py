@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # LLM connection
     api_key: SecretStr = SecretStr("not-needed")
-    api_base: str = "http://10.43.67.254:8000/v1"
+    api_base: str = "http://localhost:8000/v1"
     model_name: str = "qwen3.5-35b-a3b"
     temperature: float = 0.3
 
@@ -30,11 +30,11 @@ class Settings(BaseSettings):
 
     # RAG — Embeddings (OpenAI-compatible API)
     embedding_api_key: SecretStr = SecretStr("not-needed")
-    embedding_base_url: str = "http://10.43.45.148:7998/v1"
+    embedding_base_url: str = "http://localhost:7998/v1"
     embedding_model: str = "Qwen/Qwen3-Embedding-8B"
 
     # RAG — Reranker (Infinity API)
-    reranker_url: str = "http://10.43.63.169:7997/rerank"
+    reranker_url: str = "http://localhost:7997/rerank"
 
     # RAG — Index
     data_dir: str = "data"
@@ -71,7 +71,7 @@ Follow this exact workflow for every user request:
 
 1. **Plan** — Always start by calling `plan` with the user's question. This returns a structured research plan.
 2. **Research** — Call `research` with the plan details (goal + queries + sources).
-3. **Critique** — Call `critique` with the research findings. This returns a structured verdict.
+3. **Critique** — Call `critique` with three arguments: the original user request, a summary of the plan, and the research findings. This returns a structured verdict.
 4. **Handle verdict:**
    - If verdict is **REVISE** — call `research` again with the Critic's specific revision requests appended to the original context. Maximum {Settings().max_revision_rounds} revision rounds.
    - If verdict is **APPROVE** — compose a comprehensive Markdown report and call `save_report`.

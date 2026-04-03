@@ -4,6 +4,32 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.1.0] - 2026-04-03
+
+### Виправлено
+
+- **[P1] HITL resume format** — `Command(resume=...)` тепер відповідає
+  документованому API LangChain: `{"decisions": [...]}` замість
+  `{interrupt.id: {"decisions": [...]}}`. Гілка `edit` тепер коректно
+  відхиляє tool call з feedback і повертає Supervisor'у для ревізії.
+- **[P1] Critic не бачив оригінального запиту** — `critique()` тепер приймає
+  три аргументи: `original_request`, `plan_summary`, `findings`. Це дозволяє
+  Critic оцінювати completeness відносно реального запиту користувача.
+- **[P1] MAX_REVISION_ROUNDS enforced кодом** — лічильник `_revision_count`
+  у `supervisor.py` жорстко обмежує кількість раундів дослідження. Раніше
+  це контролювалось лише промптом.
+- **[P2] Захардкоджені приватні IP** — `config.py` тепер використовує
+  `localhost` defaults, що відповідає `.env.example` та `README.md`.
+- **[P2] Слабка валідація схем** — `sources_to_check` обмежений
+  `{"knowledge_base", "web"}` через `field_validator`. `CritiqueResult`
+  перевіряє консистентність verdict/is_*/revision_requests через
+  `model_validator`.
+
+### Додано
+
+- 30 тестів (було 7): +schema validation, +tool_parser (15 з HW5),
+  +revision counter. Всі 30 PASSED.
+
 ## [1.0.0] - 2026-04-03
 
 ### Додано

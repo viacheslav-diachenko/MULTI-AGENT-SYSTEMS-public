@@ -12,7 +12,7 @@ import logging
 from langgraph.types import Command, Interrupt
 
 from config import Settings
-from supervisor import supervisor
+from supervisor import reset_revision_counter, supervisor
 
 # Configure logging — suppress library noise
 logging.basicConfig(
@@ -48,8 +48,28 @@ def print_interrupt(interrupt: Interrupt) -> None:
     print(f"{'=' * 60}")
 
 
+def _resume_supervisor(resume_value: dict) -> None:
+    """Resume the supervisor graph after an interrupt."""
+    for step in supervisor.stream(
+        Command(resume=resume_value),
+        config=_current_config,
+        stream_mode="updates",
+    ):
+        process_stream_step(step)
+
+
 def handle_interrupt(interrupt: Interrupt) -> None:
-    """Handle HITL interrupt: approve / edit / reject."""
+    """Handle HITL interrupt: approve / edit / reject.
+
+    Uses the documented LangChain HITL resume format:
+    - approve: execute tool call as-is
+    - edit: modify tool call args (edit content/filename) before execution
+    - reject: block execution with feedback message to Supervisor
+    """
+    # Extract the original action request for potential editing
+    action_requests = interrupt.value.get("action_requests", [])
+    original_action = action_requests[0] if action_requests else {}
+
     while True:
         try:
             decision = input("\n  approve / edit / reject: ").strip().lower()
@@ -58,13 +78,7 @@ def handle_interrupt(interrupt: Interrupt) -> None:
 
         if decision == "approve":
             print("\n  Approved! Saving report...")
-            resume_value = {interrupt.id: {"decisions": [{"type": "approve"}]}}
-            for step in supervisor.stream(
-                Command(resume=resume_value),
-                config=_current_config,
-                stream_mode="updates",
-            ):
-                process_stream_step(step)
+            _resume_supervisor({"decisions": [{"type": "approve"}]})
             return
 
         elif decision == "edit":
@@ -76,38 +90,27 @@ def handle_interrupt(interrupt: Interrupt) -> None:
             if not feedback:
                 print("  No feedback provided. Try again.")
                 continue
+            # Reject the current save_report call with feedback so the
+            # Supervisor can revise the report and call save_report again.
+            # Using "reject" with a descriptive message is the correct way
+            # to bounce the action back — "edit" in the HITL API modifies
+            # tool call args directly, but we want the LLM to rewrite the
+            # content based on feedback.
             print("\n  Sending feedback to Supervisor for revision...")
-            resume_value = {
-                interrupt.id: {
-                    "decisions": [
-                        {
-                            "type": "edit",
-                            "edited_action": {"feedback": feedback},
-                        }
-                    ]
-                }
-            }
-            for step in supervisor.stream(
-                Command(resume=resume_value),
-                config=_current_config,
-                stream_mode="updates",
-            ):
-                process_stream_step(step)
+            _resume_supervisor({
+                "decisions": [
+                    {"type": "reject", "message": f"User feedback: {feedback}"}
+                ]
+            })
             return
 
         elif decision == "reject":
             print("\n  Rejected. Report will not be saved.")
-            resume_value = {
-                interrupt.id: {
-                    "decisions": [{"type": "reject", "message": "User cancelled"}]
-                }
-            }
-            for step in supervisor.stream(
-                Command(resume=resume_value),
-                config=_current_config,
-                stream_mode="updates",
-            ):
-                process_stream_step(step)
+            _resume_supervisor({
+                "decisions": [
+                    {"type": "reject", "message": "User cancelled the report."}
+                ]
+            })
             return
 
         else:
@@ -188,6 +191,7 @@ def main() -> None:
             continue
 
         logger.info("User query: %s", user_input)
+        reset_revision_counter()
 
         try:
             for step in supervisor.stream(
