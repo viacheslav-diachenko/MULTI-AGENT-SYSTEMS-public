@@ -6,6 +6,8 @@
 
 **Версія:** 1.3.1
 
+![Multi-Agent Research System Demo](demo.gif)
+
 ## Що покращено в 1.3.0
 
 - прибрано global thread state — Supervisor більше не покладається на `_active_thread_id`
