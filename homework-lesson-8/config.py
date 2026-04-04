@@ -12,8 +12,6 @@ from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 from langchain_openai import ChatOpenAI
 
-from tool_parser import Qwen3ChatWrapper
-
 
 class Settings(BaseSettings):
     """Multi-agent research system configuration."""
@@ -57,16 +55,19 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
-def create_llm(settings: Settings | None = None) -> Qwen3ChatWrapper:
-    """Create the shared Qwen-compatible chat wrapper for all agents."""
+def create_llm(settings: Settings | None = None) -> ChatOpenAI:
+    """Create the shared LLM client for all agents.
+
+    vLLM parses Qwen3 tool calls natively into the OpenAI format,
+    so no XML wrapper is needed — plain ChatOpenAI works directly.
+    """
     active_settings = settings or Settings()
-    base_llm = ChatOpenAI(
+    return ChatOpenAI(
         base_url=active_settings.api_base,
         api_key=active_settings.api_key.get_secret_value(),
         model=active_settings.model_name,
         temperature=active_settings.temperature,
     )
-    return Qwen3ChatWrapper(delegate=base_llm)
 
 
 def get_supervisor_prompt(settings: Settings | None = None) -> str:
