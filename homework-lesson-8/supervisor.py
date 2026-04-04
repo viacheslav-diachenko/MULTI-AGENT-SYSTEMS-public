@@ -7,17 +7,18 @@ HumanInTheLoopMiddleware for user approval.
 
 import json
 import logging
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langchain_core.tools import tool
+from langchain.tools import ToolRuntime, tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agents.critic import critic_agent
-from agents.planner import planner_agent
-from agents.research import research_agent
-from config import SUPERVISOR_PROMPT, Settings
+from agents.critic import build_critic_agent
+from agents.planner import build_planner_agent
+from agents.research import build_research_agent
+from config import Settings, get_supervisor_prompt
 from tool_parser import Qwen3ChatWrapper
 from tools import save_report as _save_report_tool
 
@@ -28,31 +29,59 @@ settings = Settings()
 # don't interfere with each other and budgets survive checkpoint/resume.
 _revision_counts: dict[str, int] = {}
 
-# Active thread_id — set by main.py before each supervisor.stream() call.
-_active_thread_id: str = ""
-
-
-def set_active_thread(thread_id: str) -> None:
-    """Set the active thread_id. Call before each supervisor invocation."""
-    global _active_thread_id
-    _active_thread_id = thread_id
-
 
 def reset_revision_counter(thread_id: str) -> None:
     """Reset the revision counter for a specific thread."""
     _revision_counts[thread_id] = 0
 
 
-def _get_revision_count() -> int:
-    """Get the current revision count for the active thread."""
-    return _revision_counts.get(_active_thread_id, 0)
+def _get_revision_count(thread_id: str) -> int:
+    """Get the current revision count for a specific thread."""
+    return _revision_counts.get(thread_id, 0)
 
 
-def _increment_revision_count() -> int:
-    """Increment and return the revision count for the active thread."""
-    count = _revision_counts.get(_active_thread_id, 0) + 1
-    _revision_counts[_active_thread_id] = count
+def _increment_revision_count(thread_id: str) -> int:
+    """Increment and return the revision count for a specific thread."""
+    count = _revision_counts.get(thread_id, 0) + 1
+    _revision_counts[thread_id] = count
     return count
+
+
+def _get_thread_id(runtime: ToolRuntime) -> str:
+    """Extract the configured thread_id from tool runtime config."""
+    config = getattr(runtime, "config", None) or {}
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    thread_id = configurable.get("thread_id") if isinstance(configurable, dict) else None
+    if not thread_id:
+        logger.warning("Missing thread_id in tool runtime config; using fallback thread id")
+        return "default-thread"
+    return str(thread_id)
+
+
+def _extract_message_text(result: dict[str, Any]) -> str:
+    """Extract text content from the final message of an agent result."""
+    messages = result.get("messages", [])
+    if not messages:
+        return ""
+
+    message = messages[-1]
+    text = getattr(message, "text", None)
+    if isinstance(text, str) and text:
+        return text
+
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        extracted = "\n".join(part for part in parts if part).strip()
+        return extracted or str(content)
+    return str(content)
 
 
 # ---------------------------------------------------------------------------
@@ -70,19 +99,17 @@ def plan(request: str) -> str:
     Args:
         request: The user's original research question.
     """
-    result = planner_agent.invoke(
+    result = build_planner_agent().invoke(
         {"messages": [{"role": "user", "content": request}]}
     )
-    # If structured_response is available (response_format worked), serialize it
     structured = result.get("structured_response")
     if structured is not None:
         return json.dumps(structured.model_dump(), ensure_ascii=False, indent=2)
-    # Fallback: return the last message text
-    return result["messages"][-1].text
+    return _extract_message_text(result)
 
 
 @tool
-def research(request: str) -> str:
+def research(request: str, runtime: ToolRuntime) -> str:
     """Execute a research plan using web search, URL reading, and knowledge base.
 
     Use this AFTER plan() to conduct the actual research. Pass the research
@@ -92,22 +119,28 @@ def research(request: str) -> str:
     Args:
         request: Research plan or revision instructions to execute.
     """
-    count = _increment_revision_count()
-    max_rounds = settings.max_revision_rounds + 1  # first call + N revisions
+    thread_id = _get_thread_id(runtime)
+    count = _increment_revision_count(thread_id)
+    max_total_calls = settings.max_revision_rounds + 1  # initial call + N revisions
 
-    if count > max_rounds:
+    if count > max_total_calls:
         return (
             f"REVISION LIMIT REACHED ({settings.max_revision_rounds} revision rounds). "
             "You must proceed with the current findings. Call save_report now."
         )
 
     if count > 1:
-        logger.info("Research revision round %d/%d", count - 1, settings.max_revision_rounds)
+        logger.info(
+            "Research revision round %d/%d for thread %s",
+            count - 1,
+            settings.max_revision_rounds,
+            thread_id,
+        )
 
-    result = research_agent.invoke(
+    result = build_research_agent().invoke(
         {"messages": [{"role": "user", "content": request}]}
     )
-    return result["messages"][-1].text
+    return _extract_message_text(result)
 
 
 @tool
@@ -130,35 +163,33 @@ def critique(original_request: str, plan_summary: str, findings: str) -> str:
         f"## Research Plan\n{plan_summary}\n\n"
         f"## Research Findings to Evaluate\n{findings}"
     )
-    result = critic_agent.invoke(
+    result = build_critic_agent().invoke(
         {"messages": [{"role": "user", "content": prompt}]}
     )
     structured = result.get("structured_response")
     if structured is not None:
         return json.dumps(structured.model_dump(), ensure_ascii=False, indent=2)
-    return result["messages"][-1].text
+    return _extract_message_text(result)
 
 
-# ---------------------------------------------------------------------------
-# Supervisor Agent
-# ---------------------------------------------------------------------------
+def build_supervisor():
+    """Create a fresh Supervisor agent with a dynamic prompt and checkpointer."""
+    base_llm = ChatOpenAI(
+        base_url=settings.api_base,
+        api_key=settings.api_key.get_secret_value(),
+        model=settings.model_name,
+        temperature=settings.temperature,
+    )
+    llm = Qwen3ChatWrapper(delegate=base_llm)
 
-_base_llm = ChatOpenAI(
-    base_url=settings.api_base,
-    api_key=settings.api_key.get_secret_value(),
-    model=settings.model_name,
-    temperature=settings.temperature,
-)
-_llm = Qwen3ChatWrapper(delegate=_base_llm)
-
-supervisor = create_agent(
-    _llm,
-    tools=[plan, research, critique, _save_report_tool],
-    system_prompt=SUPERVISOR_PROMPT,
-    middleware=[
-        HumanInTheLoopMiddleware(
-            interrupt_on={"save_report": True},
-        ),
-    ],
-    checkpointer=InMemorySaver(),
-)
+    return create_agent(
+        llm,
+        tools=[plan, research, critique, _save_report_tool],
+        system_prompt=get_supervisor_prompt(settings),
+        middleware=[
+            HumanInTheLoopMiddleware(
+                interrupt_on={"save_report": True},
+            ),
+        ],
+        checkpointer=InMemorySaver(),
+    )

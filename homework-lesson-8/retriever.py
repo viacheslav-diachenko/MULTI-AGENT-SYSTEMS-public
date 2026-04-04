@@ -6,8 +6,8 @@ Combines semantic search (FAISS) + BM25 (lexical) with Reciprocal Rank Fusion
 
 import hashlib
 import json
-import os
 import logging
+import os
 from typing import Optional
 
 import httpx
@@ -17,10 +17,27 @@ from langchain_core.callbacks import CallbackManagerForChainRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_openai import OpenAIEmbeddings
+from pydantic import ConfigDict
 
 from config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+def _matches_filters(
+    doc: Document,
+    source_filter: str | None = None,
+    page_filter: int | None = None,
+) -> bool:
+    """Return True when a document matches optional metadata filters."""
+    if source_filter:
+        source_lower = source_filter.lower()
+        source_name = os.path.basename(doc.metadata.get("source", "")).lower()
+        if source_lower not in source_name:
+            return False
+    if page_filter is not None and doc.metadata.get("page") != page_filter:
+        return False
+    return True
 
 
 class InfinityReranker:
@@ -114,15 +131,17 @@ class HybridRetriever(BaseRetriever):
     bm25_k: int = 10
     rrf_k: int = 60
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def _get_relevant_documents(
+    def search(
         self,
         query: str,
         *,
-        run_manager: Optional[CallbackManagerForChainRun] = None,
+        source_filter: str | None = None,
+        page_filter: int | None = None,
+        rerank_top_n: int | None = None,
     ) -> list[Document]:
+        """Search documents with optional pre-rerank metadata filtering."""
         # 1. Semantic search
         semantic_docs = self.vectorstore.similarity_search(query, k=self.semantic_k)
 
@@ -136,12 +155,40 @@ class HybridRetriever(BaseRetriever):
         )
 
         logger.info(
-            "Hybrid search: %d semantic + %d BM25 → %d unique (RRF) → reranking",
+            "Hybrid search: %d semantic + %d BM25 → %d unique (RRF)",
             len(semantic_docs), len(bm25_docs), len(merged),
         )
 
-        # 4. Rerank
-        return self.reranker.rerank(query, merged)
+        if source_filter is not None or page_filter is not None:
+            pre_filter_count = len(merged)
+            merged = [
+                doc for doc in merged
+                if _matches_filters(doc, source_filter=source_filter, page_filter=page_filter)
+            ]
+            logger.info(
+                "Applied pre-rerank filters source=%r page=%r → %d/%d documents",
+                source_filter, page_filter, len(merged), pre_filter_count,
+            )
+
+        if not merged:
+            return []
+
+        original_top_n = self.reranker.top_n
+        if rerank_top_n is not None:
+            self.reranker.top_n = rerank_top_n
+
+        try:
+            return self.reranker.rerank(query, merged)
+        finally:
+            self.reranker.top_n = original_top_n
+
+    def _get_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager: Optional[CallbackManagerForChainRun] = None,
+    ) -> list[Document]:
+        return self.search(query)
 
 
 def get_retriever() -> HybridRetriever:

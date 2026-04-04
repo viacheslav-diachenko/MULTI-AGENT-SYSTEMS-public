@@ -39,7 +39,7 @@ class TestParseXmlToolCalls:
             "</function>\n"
             "</tool_call>"
         )
-        remaining, tool_calls = parse_xml_tool_calls(content)
+        _, tool_calls = parse_xml_tool_calls(content)
 
         assert len(tool_calls) == 1
         assert tool_calls[0]["args"]["query"] == "RAG comparison"
@@ -58,7 +58,7 @@ class TestParseXmlToolCalls:
             "</function>\n"
             "</tool_call>"
         )
-        remaining, tool_calls = parse_xml_tool_calls(content)
+        _, tool_calls = parse_xml_tool_calls(content)
 
         assert len(tool_calls) == 2
         assert tool_calls[0]["name"] == "knowledge_search"
@@ -110,6 +110,32 @@ class TestParseXmlToolCalls:
 
         assert tool_calls[0]["args"]["max_results"] == 10
         assert isinstance(tool_calls[0]["args"]["max_results"], int)
+
+    def test_negative_integer_parsed_as_int(self):
+        content = (
+            "<tool_call>\n"
+            "<function=web_search>\n"
+            "<parameter=max_results>-5</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        _, tool_calls = parse_xml_tool_calls(content)
+
+        assert tool_calls[0]["args"]["max_results"] == -5
+        assert isinstance(tool_calls[0]["args"]["max_results"], int)
+
+    def test_float_value_parsed_as_float(self):
+        content = (
+            "<tool_call>\n"
+            "<function=web_search>\n"
+            "<parameter=temperature>0.25</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        _, tool_calls = parse_xml_tool_calls(content)
+
+        assert tool_calls[0]["args"]["temperature"] == 0.25
+        assert isinstance(tool_calls[0]["args"]["temperature"], float)
 
     def test_non_numeric_string_stays_string(self):
         content = (

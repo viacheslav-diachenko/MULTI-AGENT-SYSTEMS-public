@@ -4,11 +4,24 @@
 > з Supervisor, який координує Planner, Researcher та Critic за патерном
 > Plan → Research → Critique.
 
-**Версія:** 1.0.0
+**Версія:** 1.3.0
+
+## Що покращено в 1.3.0
+
+- прибрано global thread state — Supervisor більше не покладається на `_active_thread_id`
+- `thread_id` читається з `ToolRuntime.config`, тому бюджети ревізій привʼязані до реального LangGraph thread
+- metadata filtering у `knowledge_search` перенесено **до rerank**, щоб не втрачати релевантні документи
+- prompts стали dynamic: дата/час оновлюються на кожен новий запуск агентів
+- XML parser коректно обробляє **negative integers** і **float** значення
+- HITL review тепер підтримує два сценарії:
+  - **edit** — пряме редагування `filename` / `content`
+  - **revise** — повернення feedback Supervisor'у для переписування звіту
+- direct dependencies зафіксовані exact pins у `requirements.txt`
+- додано integration tests для Supervisor, HITL та knowledge-search wiring
 
 ## Архітектура
 
-```
+```text
 User (REPL)
   │
   ▼
@@ -19,13 +32,14 @@ Supervisor Agent (create_agent + HITL middleware + InMemorySaver)
   │
   ├── 2. research(plan)      → Research Agent     → findings (text)
   │                            tools: web_search, read_url, knowledge_search
+  │                            revision budget keyed by LangGraph thread_id
   │
   ├── 3. critique(findings)  → Critic Agent       → CritiqueResult (Pydantic)
   │       │                    tools: web_search, read_url, knowledge_search
   │       ├── verdict: APPROVE  → крок 4
   │       └── verdict: REVISE   → назад до кроку 2 (макс. 2 раунди)
   │
-  └── 4. save_report(...)    → HITL gate → approve / edit / reject
+  └── 4. save_report(...)    → HITL gate → approve / edit / revise / reject
 ```
 
 ### Ключовий патерн
@@ -38,7 +52,7 @@ Critic може відхилити дослідження і повернути 
 
 | Шар | Компоненти | Відповідальність |
 |-----|-----------|-----------------|
-| **Top: Supervisor** | Координатор | Роутинг, координація, синтез звіту |
+| **Top: Supervisor** | Координатор | Роутинг, координація, ревізійний цикл, HITL |
 | **Mid: Sub-Agents** | Planner, Researcher, Critic | NL → tool calls → structured output |
 | **Bottom: Tools** | web_search, read_url, knowledge_search, save_report | Точний API з типізацією |
 
@@ -47,23 +61,26 @@ Critic може відхилити дослідження і повернути 
 ### Planner Agent (`agents/planner.py`)
 
 Декомпозує запит користувача у структурований план:
-- Робить попередній пошук для розуміння домену
-- Повертає `ResearchPlan` (goal, search_queries, sources_to_check, output_format)
-- Використовує `response_format` параметр `create_agent`
+- робить попередній пошук для розуміння домену
+- повертає `ResearchPlan` (goal, search_queries, sources_to_check, output_format)
+- використовує `response_format` параметр `create_agent`
+- створюється динамічно, тому prompt не «старіє» у long-running сесії
 
 ### Research Agent (`agents/research.py`)
 
 Виконує дослідження за планом:
-- Шукає в knowledge base та інтернеті
-- Читає повні статті через `read_url`
-- Повертає текстові findings з цитатами джерел
+- шукає в knowledge base та інтернеті
+- читає повні статті через `read_url`
+- повертає текстові findings з цитатами джерел
+- лічильник ревізій тепер прив'язаний до `thread_id` із runtime config, а не до global state
 
 ### Critic Agent (`agents/critic.py`)
 
 Оцінює якість дослідження через **незалежну верифікацію**:
-- Самостійно шукає для перевірки фактів та актуальності
-- Оцінює три виміри: **Freshness**, **Completeness**, **Structure**
-- Повертає `CritiqueResult` з verdict (APPROVE/REVISE) та конкретним зворотним зв'язком
+- самостійно шукає для перевірки фактів та актуальності
+- оцінює три виміри: **Freshness**, **Completeness**, **Structure**
+- повертає `CritiqueResult` з verdict (`APPROVE` / `REVISE`) та конкретним feedback
+- отримує актуальну дату щоразу через dynamic prompt builder
 
 ### Supervisor Agent (`supervisor.py`)
 
@@ -77,8 +94,20 @@ Critic може відхилити дослідження і повернути 
 
 При виклику `save_report` Supervisor зупиняється і показує превʼю звіту:
 - **approve** — зберегти звіт як є
-- **edit** — ввести feedback, Supervisor переробляє і запитує знову
+- **edit** — напряму відредагувати `filename` та/або `content` перед викликом tool
+- **revise** — відправити feedback назад Supervisor'у, щоб він переписав звіт
 - **reject** — скасувати збереження
+
+## Knowledge Search і filtering
+
+`knowledge_search` тепер працює так:
+1. FAISS semantic retrieval
+2. BM25 lexical retrieval
+3. Reciprocal Rank Fusion (RRF)
+4. **metadata filtering before rerank**
+5. Infinity rerank
+
+Це прибирає стару проблему, коли документ міг бути релевантним для `source_filter` / `page_filter`, але випадати ще до етапу фільтрації через занадто малий rerank cutoff.
 
 ## Структурований вивід (Pydantic)
 
@@ -86,10 +115,10 @@ Critic може відхилити дослідження і повернути 
 
 ```python
 class ResearchPlan(BaseModel):
-    goal: str                     # Що досліджуємо
-    search_queries: list[str]     # Конкретні пошукові запити
-    sources_to_check: list[str]   # "knowledge_base", "web", або обидва
-    output_format: str            # Формат фінального звіту
+    goal: str
+    search_queries: list[str]
+    sources_to_check: list[Literal["knowledge_base", "web"]]
+    output_format: str
 ```
 
 ### CritiqueResult
@@ -97,12 +126,12 @@ class ResearchPlan(BaseModel):
 ```python
 class CritiqueResult(BaseModel):
     verdict: Literal["APPROVE", "REVISE"]
-    is_fresh: bool                # Дані актуальні?
-    is_complete: bool             # Повне покриття запиту?
-    is_well_structured: bool      # Логічна структура?
-    strengths: list[str]          # Що добре
-    gaps: list[str]               # Що пропущено
-    revision_requests: list[str]  # Що виправити (якщо REVISE)
+    is_fresh: bool
+    is_complete: bool
+    is_well_structured: bool
+    strengths: list[str]
+    gaps: list[str]
+    revision_requests: list[str]
 ```
 
 ## Встановлення та запуск
@@ -118,7 +147,7 @@ class CritiqueResult(BaseModel):
 
 ```bash
 cd homework-lesson-8
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 cp .env.example .env
 # Відредагуйте .env — вкажіть URL ваших сервісів
 ```
@@ -135,68 +164,59 @@ python ingest.py
 python main.py
 ```
 
-### Приклад сесії
+## Приклад HITL-сесії
 
-```
+```text
 You: Порівняй naive RAG та sentence-window retrieval. Напиши звіт.
 
   [Supervisor -> plan] Порівняй naive RAG та sentence-window retrieval...
   <- [plan] 450 chars
 
-  [Supervisor -> research] Research these topics: 1) naive RAG approach...
+  [Supervisor -> research] Research these topics...
   <- [research] 3200 chars
 
   [Supervisor -> critique] Findings: ...
   <- [critique] 380 chars
 
-  [Supervisor -> research] Revision: Find 2025-2026 benchmarks...
-  <- [research] 2800 chars
-
-  [Supervisor -> critique] Updated findings: ...
-  <- [critique] 290 chars
-
   [Supervisor -> save_report] rag_comparison.md
 
-  ============================================================
-    ACTION REQUIRES APPROVAL
-  ============================================================
-    Tool:     save_report
-    Filename: rag_comparison.md
-    Preview:
-  # Порівняння RAG-підходів...
-  ============================================================
+  approve / edit / revise / reject: revise
+  Your feedback (what to change): Додай секцію про trade-offs.
 
-    approve / edit / reject: approve
-
-    Approved! Report saved to output/rag_comparison.md
+  Sending feedback to Supervisor for revision...
 ```
 
 ## Структура проєкту
 
-```
+```text
 homework-lesson-8/
-├── main.py              # REPL з HITL interrupt/resume
-├── supervisor.py        # Supervisor + agent-as-tool обгортки
+├── main.py
+├── supervisor.py
 ├── agents/
 │   ├── __init__.py
-│   ├── planner.py       # Planner Agent (ResearchPlan)
-│   ├── research.py      # Research Agent
-│   └── critic.py        # Critic Agent (CritiqueResult)
-├── schemas.py           # Pydantic: ResearchPlan, CritiqueResult
-├── tools.py             # web_search, read_url, knowledge_search, save_report
-├── retriever.py         # Hybrid retriever (FAISS + BM25 + RRF + Infinity)
-├── tool_parser.py       # Qwen3ChatWrapper (XML tool call parser)
-├── ingest.py            # PDF → chunks → FAISS + BM25
-├── config.py            # Settings + 4 system prompts
+│   ├── planner.py
+│   ├── research.py
+│   └── critic.py
+├── schemas.py
+├── tools.py
+├── retriever.py
+├── tool_parser.py
+├── ingest.py
+├── config.py
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
-├── data/                # PDF-документи для RAG
+├── data/
 │   ├── langchain.pdf
 │   ├── large-language-model.pdf
 │   └── retrieval-augmented-generation.pdf
 ├── tests/
-│   └── test_schemas.py  # 7 тестів для Pydantic-схем
+│   ├── test_main_integration.py
+│   ├── test_revision_counter.py
+│   ├── test_schemas.py
+│   ├── test_supervisor_integration.py
+│   ├── test_tool_parser.py
+│   └── test_tools_integration.py
 ├── CHANGELOG.md
 └── README.md
 ```
@@ -206,38 +226,59 @@ homework-lesson-8/
 Всі параметри налаштовуються через `.env`:
 
 | Параметр | За замовчуванням | Опис |
-|----------|-----------------|------|
+|----------|------------------|------|
 | `API_BASE` | `http://localhost:8000/v1` | LLM endpoint (SGLang) |
 | `MODEL_NAME` | `qwen3.5-35b-a3b` | Модель |
-| `MAX_REVISION_ROUNDS` | `2` | Макс. раундів Critic→Researcher |
+| `MAX_REVISION_ROUNDS` | `2` | Макс. раундів Critic → Researcher |
 | `MAX_ITERATIONS` | `50` | Recursion limit для Supervisor |
-| `MAX_SEARCH_CONTENT_LENGTH` | `4000` | Ліміт web_search |
-| `MAX_URL_CONTENT_LENGTH` | `8000` | Ліміт read_url |
-| `MAX_KNOWLEDGE_CONTENT_LENGTH` | `6000` | Ліміт knowledge_search |
+| `MAX_SEARCH_CONTENT_LENGTH` | `4000` | Ліміт `web_search` |
+| `MAX_URL_CONTENT_LENGTH` | `8000` | Ліміт `read_url` |
+| `MAX_KNOWLEDGE_CONTENT_LENGTH` | `6000` | Ліміт `knowledge_search` |
+| `FILTERED_RERANK_TOP_N` | `10` | Rerank cutoff для запитів із metadata filters |
 
 Повний список — у `.env.example`.
 
 ## Тестування
 
+Поточний набір містить **41 тест**.
+
+### Повний запуск
+
 ```bash
 python -m pytest tests/ -v
 ```
+
+### Швидкий запуск integration checks без повного suite
+
+```bash
+python -m unittest \
+  tests.test_main_integration \
+  tests.test_supervisor_integration \
+  tests.test_tools_integration
+```
+
+Покрито:
+- schema validation
+- XML tool parser
+- revision counter logic
+- HITL edit / revise wiring
+- knowledge_search filter wiring
+- supervisor revision budgeting by `thread_id`
 
 ## Що перевикористано з HW5
 
 - `retriever.py` — HybridRetriever (FAISS + BM25 + RRF + Infinity reranker)
 - `tool_parser.py` — Qwen3ChatWrapper для XML tool call parsing
 - `ingest.py` — Pipeline: PDF → chunks → embeddings → FAISS + BM25
-- Tools: `web_search`, `read_url`, `knowledge_search` (без змін)
+- tools: `web_search`, `read_url`, `knowledge_search`
 - `data/` — PDF-документи
 
 ## Що нового порівняно з HW5
 
 | Було (HW5) | Стало (HW8) |
-|------------|------------|
+|------------|-------------|
 | Один Research Agent з 4 tools | Supervisor + 3 суб-агенти |
 | Агент робить усе одразу | Plan → Research → Critique цикл |
 | Одноразове дослідження | Ітеративне (макс. 2 раунди ревізії) |
-| Без підтвердження | HITL: save_report потребує approve/edit/reject |
-| Лише вільний текст | Structured output (Pydantic) для Planner і Critic |
-| `create_react_agent` (langgraph) | `create_agent` (langchain 1.x) |
+| Static prompts | Dynamic prompt builders |
+| Post-rerank filter | Pre-rerank metadata filtering |

@@ -4,6 +4,35 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.3.0] - 2026-04-04
+
+### Виправлено
+
+- **[P1] Global thread state прибрано** — `research()` більше не покладається на
+  `_active_thread_id`. `thread_id` зчитується з `ToolRuntime.config`, тому бюджети
+  ревізій привʼязані до реального LangGraph thread, а не до module-level state.
+- **[P1] Metadata filtering перенесено до rerank pipeline** — `knowledge_search()`
+  тепер передає `source_filter` / `page_filter` у `HybridRetriever.search()`, де
+  фільтрація застосовується **до** Infinity rerank.
+- **[P2] Frozen prompts** — статичні `*_PROMPT` константи замінено на dynamic
+  prompt builders. Supervisor і Critic завжди отримують актуальні дату/час.
+- **[P2] Numeric parsing у XML tool parser** — `tool_parser.py` тепер коректно
+  коерсить negative integers і float значення, а не тільки `isdigit()` випадки.
+- **[P2] HITL UX polish** — REPL тепер підтримує окремі сценарії:
+  `approve`, `edit`, `revise`, `reject`. `edit` напряму редагує args tool call,
+  `revise` повертає feedback Supervisor'у для переписування звіту.
+- **[P2] Dependency drift** — `requirements.txt` переведено на exact pins, щоб
+  зафіксувати стек, на якому код перевірявся локально.
+
+### Додано
+
+- 8 тести (було 33, стало 41):
+  - +2 integration tests для Supervisor revision budgeting
+  - +2 integration tests для HITL interrupt handling
+  - +2 integration tests для knowledge_search filter wiring
+  - +2 parser tests для negative integer / float numeric coercion
+- Оновлений `README.md` з описом нового review flow, dynamic prompts та тестового набору.
+
 ## [1.2.0] - 2026-04-03
 
 ### Виправлено

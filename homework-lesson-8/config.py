@@ -1,8 +1,9 @@
-"""Application settings and system prompts for all agents.
+"""Application settings and dynamic prompt builders for all agents.
 
 All configurable values are loaded from environment variables (.env file)
-via Pydantic Settings. System prompts for Supervisor, Planner, Researcher,
-and Critic are defined as module-level constants.
+via Pydantic Settings. Prompt builder functions are used instead of
+frozen module-level strings so long-running sessions always see the
+current date/time in their instructions.
 """
 
 from datetime import datetime
@@ -53,11 +54,11 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
-# ---------------------------------------------------------------------------
-# System Prompts
-# ---------------------------------------------------------------------------
-
-SUPERVISOR_PROMPT = f"""You are a Supervisor Agent that coordinates a research team of three specialized agents.
+def get_supervisor_prompt(settings: Settings | None = None) -> str:
+    """Build the Supervisor prompt with a fresh timestamp."""
+    active_settings = settings or Settings()
+    current_datetime = datetime.now().isoformat()
+    return f"""You are a Supervisor Agent that coordinates a research team of three specialized agents.
 
 Available tools:
 - **plan** — Decomposes a user question into a structured research plan.
@@ -73,19 +74,17 @@ Follow this exact workflow for every user request:
 2. **Research** — Call `research` with the plan details (goal + queries + sources).
 3. **Critique** — Call `critique` with three arguments: the original user request, a summary of the plan, and the research findings. This returns a structured verdict.
 4. **Handle verdict:**
-   - If verdict is **REVISE** — call `research` again with the Critic's specific revision requests appended to the original context. Maximum {Settings().max_revision_rounds} revision rounds.
+   - If verdict is **REVISE** — call `research` again with the Critic's specific revision requests appended to the original context. Maximum {active_settings.max_revision_rounds} revision rounds.
    - If verdict is **APPROVE** — compose a comprehensive Markdown report and call `save_report`.
 5. **Report** — After save_report is approved, summarize what was done for the user.
 
-## Handling save_report rejection
+## Handling save_report review
 
-When `save_report` is rejected by the user, you will receive a feedback message.
-You MUST:
-1. Read the user's feedback carefully.
-2. Revise the report content based on that feedback.
-3. Call `save_report` again with the updated filename and content.
-4. Do NOT treat rejection as cancellation — always resubmit unless the feedback
-   explicitly says "cancel" or "stop".
+When save_report is interrupted for review, support these outcomes:
+1. **approve** — execute the tool call as-is.
+2. **edit** — accept direct filename/content edits from the human reviewer.
+3. **revise** — if the reviewer provides feedback for the Supervisor, rewrite the report and resubmit save_report.
+4. **reject** — cancel saving only when the reviewer explicitly declines to continue.
 
 ## Important
 - Never skip the plan step — it ensures systematic coverage.
@@ -93,10 +92,13 @@ You MUST:
 - Always pass the Critic's revision_requests to the next research round.
 - The final report must be well-structured Markdown with headings, tables, pros/cons, and source citations.
 - Write in the same language as the user's question.
-- Current datetime: {datetime.now().isoformat()}
+- Current datetime: {current_datetime}
 """
 
-PLANNER_PROMPT = """You are a Research Planner Agent. Your job is to analyze a user's question and create a structured research plan.
+
+def get_planner_prompt() -> str:
+    """Build the Planner prompt."""
+    return """You are a Research Planner Agent. Your job is to analyze a user's question and create a structured research plan.
 
 ## Process
 1. First, do a quick preliminary search using your tools (web_search and/or knowledge_search) to understand the domain and what information is available.
@@ -111,7 +113,10 @@ PLANNER_PROMPT = """You are a Research Planner Agent. Your job is to analyze a u
 - Match the language of the user's question.
 """
 
-RESEARCHER_PROMPT = """You are a Research Agent that executes research plans thoroughly and systematically.
+
+def get_researcher_prompt() -> str:
+    """Build the Researcher prompt."""
+    return """You are a Research Agent that executes research plans thoroughly and systematically.
 
 ## Your Capabilities
 - **knowledge_search**: Search the local knowledge base (documents about RAG, LLMs, LangChain). Use FIRST for domain topics.
@@ -132,7 +137,11 @@ RESEARCHER_PROMPT = """You are a Research Agent that executes research plans tho
 - Write in the same language as the original question.
 """
 
-CRITIC_PROMPT = f"""You are a Research Critic Agent. Your job is to evaluate research findings by independently verifying them.
+
+def get_critic_prompt() -> str:
+    """Build the Critic prompt with a fresh current date."""
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    return f"""You are a Research Critic Agent. Your job is to evaluate research findings by independently verifying them.
 
 ## Your Capabilities
 - **web_search**: Search the internet to verify claims and check for newer information.
@@ -153,5 +162,5 @@ CRITIC_PROMPT = f"""You are a Research Critic Agent. Your job is to evaluate res
 - Be specific in your gaps and revision_requests — "Find 2025-2026 benchmarks" is better than "needs more data".
 - Set verdict to APPROVE only when ALL three dimensions (fresh, complete, well-structured) are satisfactory.
 - Set verdict to REVISE if any dimension fails, with specific revision_requests.
-- Current date for freshness evaluation: {datetime.now().strftime("%Y-%m-%d")}
+- Current date for freshness evaluation: {current_date}
 """

@@ -4,8 +4,8 @@ Reused from homework-lesson-5 with write_report renamed to save_report
 for clarity in the HITL context.
 """
 
-import os
 import logging
+import os
 from typing import Optional
 
 import trafilatura
@@ -63,36 +63,23 @@ def knowledge_search(
 
     try:
         retriever = _get_or_init_retriever()
-        if has_filters:
-            original_top_n = retriever.reranker.top_n
-            retriever.reranker.top_n = settings.filtered_rerank_top_n
-            try:
-                docs = retriever.invoke(query)
-            finally:
-                retriever.reranker.top_n = original_top_n
-        else:
-            docs = retriever.invoke(query)
+        docs = retriever.search(
+            query,
+            source_filter=source_filter,
+            page_filter=page_filter,
+            rerank_top_n=settings.filtered_rerank_top_n if has_filters else None,
+        )
     except Exception as e:
         logger.warning("knowledge_search failed: %s", e)
         return f"Knowledge base search failed: {e}"
 
     if not docs:
+        if has_filters:
+            return (
+                f"No results after filtering (source={source_filter!r}, page={page_filter}). "
+                "Try a broader query or remove filters."
+            )
         return "No relevant documents found in the knowledge base. Try web_search instead."
-
-    if source_filter:
-        source_lower = source_filter.lower()
-        docs = [
-            d for d in docs
-            if source_lower in os.path.basename(d.metadata.get("source", "")).lower()
-        ]
-    if page_filter is not None:
-        docs = [d for d in docs if d.metadata.get("page") == page_filter]
-
-    if not docs:
-        return (
-            f"No results after filtering (source={source_filter!r}, page={page_filter}). "
-            "Try a broader query or remove filters."
-        )
 
     results = []
     for i, doc in enumerate(docs, 1):
@@ -134,10 +121,10 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
         return "No results found. Try a different search query."
 
     formatted = []
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "No title")
-        url = r.get("href", r.get("link", ""))
-        snippet = r.get("body", r.get("snippet", ""))
+    for i, result in enumerate(results, 1):
+        title = result.get("title", "No title")
+        url = result.get("href", result.get("link", ""))
+        snippet = result.get("body", result.get("snippet", ""))
         formatted.append(f"{i}. **{title}**\n   URL: {url}\n   {snippet}")
 
     output = "\n\n".join(formatted)
@@ -210,8 +197,8 @@ def save_report(filename: str, content: str) -> str:
 
     filepath = os.path.join(output_dir, safe_name)
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
+        with open(filepath, "w", encoding="utf-8") as file_handle:
+            file_handle.write(content)
     except OSError as e:
         logger.error("save_report failed for path=%r: %s", filepath, e)
         return f"Failed to save report: {e}"

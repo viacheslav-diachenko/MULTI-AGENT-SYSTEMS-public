@@ -2,17 +2,16 @@
 
 Runs a REPL loop where the user types questions and the Supervisor
 orchestrates Plan -> Research -> Critique cycle. save_report operations
-require user approval (approve / edit / reject).
+require user approval (approve / edit / revise / reject).
 """
 
-import json
-import uuid
 import logging
+import uuid
 
 from langgraph.types import Command, Interrupt
 
 from config import Settings
-from supervisor import reset_revision_counter, set_active_thread, supervisor
+from supervisor import build_supervisor, reset_revision_counter
 
 # Configure logging — suppress library noise
 logging.basicConfig(
@@ -24,18 +23,19 @@ logger.setLevel(logging.INFO)
 
 settings = Settings()
 
-# Module-level config reference for use in handle_interrupt
+# Module-level references for use in handle_interrupt
 _current_config: dict = {}
+_current_supervisor = None
 
 
 def print_interrupt(interrupt: Interrupt) -> None:
     """Display interrupt details for user review."""
     print(f"\n{'=' * 60}")
-    print(f"  ACTION REQUIRES APPROVAL")
+    print("  ACTION REQUIRES APPROVAL")
     print(f"{'=' * 60}")
     action_requests = interrupt.value.get("action_requests", [])
     for request in action_requests:
-        action = request.get("action", "N/A")
+        action = request.get("action") or request.get("name") or "N/A"
         args = request.get("args", {})
         print(f"  Tool:     {action}")
         filename = args.get("filename", "unknown")
@@ -50,7 +50,10 @@ def print_interrupt(interrupt: Interrupt) -> None:
 
 def _resume_supervisor(resume_value: dict) -> None:
     """Resume the supervisor graph after an interrupt."""
-    for step in supervisor.stream(
+    if _current_supervisor is None:
+        raise RuntimeError("No active supervisor run to resume.")
+
+    for step in _current_supervisor.stream(
         Command(resume=resume_value),
         config=_current_config,
         stream_mode="updates",
@@ -58,21 +61,52 @@ def _resume_supervisor(resume_value: dict) -> None:
         process_stream_step(step)
 
 
-def handle_interrupt(interrupt: Interrupt) -> None:
-    """Handle HITL interrupt: approve / edit / reject.
+def _prompt_replacement_content(current_content: str) -> str | None:
+    """Prompt for full replacement content; blank first line keeps current content."""
+    print("  Replacement content editor:")
+    print("    - Press Enter on an empty first line to keep the current content.")
+    print("    - Otherwise paste the full replacement Markdown.")
+    print("    - Finish the paste with a line containing only END.")
 
-    Uses the documented LangChain HITL resume format:
-    - approve: execute tool call as-is
-    - edit: modify tool call args (edit content/filename) before execution
-    - reject: block execution with feedback message to Supervisor
+    try:
+        first_line = input()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+    if first_line == "":
+        return current_content
+
+    lines = [first_line]
+    while True:
+        try:
+            line = input()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if line == "END":
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def handle_interrupt(interrupt: Interrupt) -> None:
+    """Handle HITL interrupt: approve / edit / revise / reject.
+
+    approve
+        Execute the tool call as-is.
+    edit
+        Modify tool-call args directly before execution.
+    revise
+        Send feedback back to the Supervisor so it rewrites the report.
+    reject
+        Cancel saving entirely.
     """
-    # Extract the original action request for potential editing
     action_requests = interrupt.value.get("action_requests", [])
     original_action = action_requests[0] if action_requests else {}
+    original_args = original_action.get("args", {})
 
     while True:
         try:
-            decision = input("\n  approve / edit / reject: ").strip().lower()
+            decision = input("\n  approve / edit / revise / reject: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             decision = "reject"
 
@@ -81,46 +115,75 @@ def handle_interrupt(interrupt: Interrupt) -> None:
             _resume_supervisor({"decisions": [{"type": "approve"}]})
             return
 
-        elif decision == "edit":
+        if decision == "edit":
+            if not original_action:
+                print("  No action request available to edit.")
+                continue
+
+            action_name = original_action.get("action") or original_action.get("name") or "save_report"
+            current_filename = original_args.get("filename", "report.md")
+            current_content = original_args.get("content", "")
+
+            try:
+                new_filename = input(
+                    f"  New filename (Enter to keep '{current_filename}'): "
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Edit cancelled. Returning to approval prompt.")
+                continue
+
+            new_content = _prompt_replacement_content(current_content)
+            if new_content is None:
+                print("\n  Edit cancelled. Returning to approval prompt.")
+                continue
+
+            edited_action = {
+                "name": action_name,
+                "args": {
+                    "filename": new_filename or current_filename,
+                    "content": new_content,
+                },
+            }
+            print("\n  Applying edited tool arguments...")
+            _resume_supervisor({
+                "decisions": [
+                    {"type": "edit", "editedAction": edited_action},
+                ]
+            })
+            return
+
+        if decision == "revise":
             try:
                 feedback = input("  Your feedback (what to change): ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n  Cancelled.")
-                return
+                print("\n  Revision feedback cancelled. Returning to approval prompt.")
+                continue
             if not feedback:
                 print("  No feedback provided. Try again.")
                 continue
-            # Reject the current save_report call with feedback so the
-            # Supervisor can revise the report and call save_report again.
-            # Using "reject" with a descriptive message is the correct way
-            # to bounce the action back — "edit" in the HITL API modifies
-            # tool call args directly, but we want the LLM to rewrite the
-            # content based on feedback.
             print("\n  Sending feedback to Supervisor for revision...")
             _resume_supervisor({
                 "decisions": [
-                    {"type": "reject", "message": f"User feedback: {feedback}"}
+                    {"type": "reject", "message": f"User feedback: {feedback}"},
                 ]
             })
             return
 
-        elif decision == "reject":
+        if decision == "reject":
             print("\n  Rejected. Report will not be saved.")
             _resume_supervisor({
                 "decisions": [
-                    {"type": "reject", "message": "User cancelled the report."}
+                    {"type": "reject", "message": "User cancelled the report."},
                 ]
             })
             return
 
-        else:
-            print("  Invalid choice. Please enter: approve, edit, or reject")
+        print("  Invalid choice. Please enter: approve, edit, revise, or reject")
 
 
 def process_stream_step(step: dict) -> None:
     """Process a single stream step — print messages or handle interrupts."""
-    for key, update in step.items():
-        # Handle interrupts (HITL)
+    for _, update in step.items():
         if isinstance(update, tuple) and len(update) > 0 and isinstance(update[0], Interrupt):
             interrupt = update[0]
             print_interrupt(interrupt)
@@ -131,21 +194,18 @@ def process_stream_step(step: dict) -> None:
             continue
 
         for msg in update.get("messages", []):
-            # Show tool calls being made
             if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
+                for tool_call in msg.tool_calls:
                     args_preview = ""
-                    if tc.get("args"):
-                        first_val = list(tc["args"].values())[0]
+                    if tool_call.get("args"):
+                        first_val = list(tool_call["args"].values())[0]
                         args_preview = str(first_val)[:100]
-                    print(f"\n  [Supervisor -> {tc['name']}] {args_preview}")
+                    print(f"\n  [Supervisor -> {tool_call['name']}] {args_preview}")
 
-            # Show tool results
             elif hasattr(msg, "name") and getattr(msg, "type", "") == "tool":
                 content_len = len(str(msg.content))
                 print(f"  <- [{msg.name}] {content_len} chars")
 
-            # Print final text responses (not tool messages)
             elif hasattr(msg, "content") and msg.content:
                 msg_type = getattr(msg, "type", "")
                 if msg_type not in ("tool",):
@@ -154,7 +214,7 @@ def process_stream_step(step: dict) -> None:
 
 def main() -> None:
     """Interactive REPL for the multi-agent research system."""
-    global _current_config
+    global _current_config, _current_supervisor
 
     print("=" * 60)
     print("  Multi-Agent Research System")
@@ -187,15 +247,16 @@ def main() -> None:
         if user_input.lower() == "new":
             thread_id = uuid.uuid4().hex
             _current_config["configurable"]["thread_id"] = thread_id
+            _current_supervisor = None
             print("--- New conversation started ---")
             continue
 
         logger.info("User query: %s", user_input)
-        set_active_thread(thread_id)
         reset_revision_counter(thread_id)
+        _current_supervisor = build_supervisor()
 
         try:
-            for step in supervisor.stream(
+            for step in _current_supervisor.stream(
                 {"messages": [{"role": "user", "content": user_input}]},
                 config=_current_config,
                 stream_mode="updates",

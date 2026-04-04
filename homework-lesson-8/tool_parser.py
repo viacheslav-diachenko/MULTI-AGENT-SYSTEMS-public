@@ -14,17 +14,16 @@ and convert them into proper AIMessage.tool_calls format that LangGraph
 create_react_agent expects.
 """
 
+import logging
 import re
 import uuid
-import logging
 from typing import Any
 
+from pydantic import PrivateAttr
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_core.runnables import Runnable
-from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,16 @@ _PARAM_RE = re.compile(
     r"<parameter=(\w+)>\s*(.*?)\s*</parameter>",
     re.DOTALL,
 )
+
+
+def _coerce_parameter_value(param_value: str) -> Any:
+    """Coerce XML parameter values to numeric types when safe."""
+    for parser in (int, float):
+        try:
+            return parser(param_value)
+        except ValueError:
+            continue
+    return param_value
 
 
 def parse_xml_tool_calls(content: str) -> tuple[str, list[dict]]:
@@ -57,11 +66,7 @@ def parse_xml_tool_calls(content: str) -> tuple[str, list[dict]]:
         for param_match in _PARAM_RE.finditer(params_block):
             param_name = param_match.group(1)
             param_value = param_match.group(2).strip()
-            # Try to parse numeric values
-            if param_value.isdigit():
-                args[param_name] = int(param_value)
-            else:
-                args[param_name] = param_value
+            args[param_name] = _coerce_parameter_value(param_value)
 
         tool_calls.append({
             "name": func_name,
@@ -82,7 +87,7 @@ class Qwen3ChatWrapper(BaseChatModel):
     """
 
     delegate: BaseChatModel
-    _bound_tool_schemas: list[dict] = []
+    _bound_tool_schemas: list[dict[str, Any]] = PrivateAttr(default_factory=list)
 
     @property
     def _llm_type(self) -> str:
@@ -106,7 +111,7 @@ class Qwen3ChatWrapper(BaseChatModel):
         new_generations = []
         for gen in result.generations:
             msg = gen.message
-            if isinstance(msg, AIMessage) and msg.content and not msg.tool_calls:
+            if isinstance(msg, AIMessage) and isinstance(msg.content, str) and msg.content and not msg.tool_calls:
                 remaining, tool_calls = parse_xml_tool_calls(msg.content)
                 if tool_calls:
                     logger.info(
@@ -117,7 +122,10 @@ class Qwen3ChatWrapper(BaseChatModel):
                     new_msg = AIMessage(
                         content=remaining,
                         tool_calls=tool_calls,
+                        additional_kwargs=msg.additional_kwargs,
                         response_metadata=msg.response_metadata,
+                        id=msg.id,
+                        usage_metadata=msg.usage_metadata,
                     )
                     new_generations.append(ChatGeneration(message=new_msg))
                     continue
@@ -136,11 +144,11 @@ class Qwen3ChatWrapper(BaseChatModel):
         from langchain_core.utils.function_calling import convert_to_openai_tool
 
         schemas = []
-        for t in tools:
-            if isinstance(t, dict):
-                schemas.append(t)
+        for tool_def in tools:
+            if isinstance(tool_def, dict):
+                schemas.append(tool_def)
             else:
-                schemas.append(convert_to_openai_tool(t))
+                schemas.append(convert_to_openai_tool(tool_def))
 
         new_wrapper = Qwen3ChatWrapper(delegate=self.delegate)
         new_wrapper._bound_tool_schemas = schemas
