@@ -12,14 +12,12 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.tools import ToolRuntime, tool
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agents.critic import build_critic_agent
 from agents.planner import build_planner_agent
 from agents.research import build_research_agent
-from config import Settings, get_supervisor_prompt
-from tool_parser import Qwen3ChatWrapper
+from config import Settings, create_llm, get_supervisor_prompt
 from tools import save_report as _save_report_tool
 
 logger = logging.getLogger(__name__)
@@ -174,16 +172,8 @@ def critique(original_request: str, plan_summary: str, findings: str) -> str:
 
 def build_supervisor():
     """Create a fresh Supervisor agent with a dynamic prompt and checkpointer."""
-    base_llm = ChatOpenAI(
-        base_url=settings.api_base,
-        api_key=settings.api_key.get_secret_value(),
-        model=settings.model_name,
-        temperature=settings.temperature,
-    )
-    llm = Qwen3ChatWrapper(delegate=base_llm)
-
     return create_agent(
-        llm,
+        create_llm(settings),
         tools=[plan, research, critique, _save_report_tool],
         system_prompt=get_supervisor_prompt(settings),
         middleware=[

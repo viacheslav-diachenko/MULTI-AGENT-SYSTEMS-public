@@ -4,7 +4,7 @@
 > з Supervisor, який координує Planner, Researcher та Critic за патерном
 > Plan → Research → Critique.
 
-**Версія:** 1.3.0
+**Версія:** 1.3.1
 
 ## Що покращено в 1.3.0
 
@@ -18,6 +18,16 @@
   - **revise** — повернення feedback Supervisor'у для переписування звіту
 - direct dependencies зафіксовані exact pins у `requirements.txt`
 - додано integration tests для Supervisor, HITL та knowledge-search wiring
+
+## Що дороблено в 1.3.1
+
+- додано shared `create_llm()` factory у `config.py`
+- прибрано дублювання `ChatOpenAI + Qwen3ChatWrapper` у:
+  - `agents/planner.py`
+  - `agents/research.py`
+  - `agents/critic.py`
+  - `supervisor.py`
+- ініціалізація LLM тепер централізована, тому зміни моделі / endpoint / temperature більше не треба синхронно правити в 4 файлах
 
 ## Архітектура
 

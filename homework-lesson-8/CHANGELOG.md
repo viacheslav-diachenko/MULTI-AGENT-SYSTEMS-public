@@ -4,6 +4,19 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.3.1] - 2026-04-04
+
+### Виправлено
+
+- **[P3] LLM initialization duplication (Issue #11)** — додано shared
+  `create_llm()` factory у `config.py` і переведено `planner.py`,
+  `research.py`, `critic.py` та `supervisor.py` на централізовану
+  ініціалізацію `ChatOpenAI + Qwen3ChatWrapper`.
+
+### Додано
+
+- Документацію в `README.md` про shared LLM factory і DRY cleanup.
+
 ## [1.3.0] - 2026-04-04
 
 ### Виправлено
