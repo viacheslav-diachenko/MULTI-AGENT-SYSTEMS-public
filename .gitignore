@@ -1,0 +1,15 @@
+# Secrets
+client_secret.json
+token.json
+.env
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
