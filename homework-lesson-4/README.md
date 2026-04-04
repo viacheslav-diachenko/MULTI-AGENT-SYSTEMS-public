@@ -65,6 +65,13 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 7. **Покращений system prompt** — структурований за секціями (Role, Tools, Strategy,
    Format, Rules) з явними anti-patterns і обмеженнями поведінки.
 
+8. **Tool call budget enforcement** — жорсткий ліміт `max_tool_calls` (default: 5)
+   enforce-иться в коді, а не лише в prompt. Duplicate calls автоматично пропускаються.
+
+9. **XML-safe streaming** — `_stream_llm()` використовує look-ahead буфер:
+   текст, що може бути початком `<tool_call>`, утримується доки не підтвердиться
+   чи це тег. Навіть часткові фрагменти (`<tool`) не витікають в stdout.
+
 ---
 
 ## Архітектура
@@ -119,7 +126,7 @@ Model-generated report: [example_output/report.md](example_output/report.md)
 │   web_search(query)        read_url(url)        write_report(f, c)   │
 │   └─ DDGS (DuckDuckGo)    └─ trafilatura        └─ File I/O         │
 │      → snippets + URLs       → full text            → .md file       │
-│                              (≤8000 chars)                           │
+│      (≤4000 chars)           (≤8000 chars)                           │
 └──────────────────────────────────────────────────────────────────────┘
                  │
                  ▼
@@ -171,17 +178,20 @@ User: "Порівняй naive RAG та sentence-window retrieval"
 
 ```
 homework-lesson-4/
-├── main.py              # Entry point — інтерактивний REPL
-├── agent.py             # ResearchAgent — custom ReAct loop + XML parser
-├── tools.py             # Tool функції + JSON Schema + TOOL_REGISTRY
-├── config.py            # Pydantic Settings + SYSTEM_PROMPT
-├── requirements.txt     # Залежності (без langgraph/langchain)
-├── .env.example         # Шаблон змінних середовища
+├── main.py                # Entry point — інтерактивний REPL
+├── agent.py               # ResearchAgent — custom ReAct loop + XML parser
+├── tools.py               # Tool функції + JSON Schema + TOOL_REGISTRY
+├── test_agent_parser.py   # Unit-тести для XML парсера (15 тестів)
+├── test_tool_decorator.py # Unit-тести для @tool декоратора (18 тестів)
+├── config.py              # Pydantic Settings + SYSTEM_PROMPT
+├── requirements.txt       # Залежності (без langgraph/langchain)
+├── .env.example           # Шаблон змінних середовища
 ├── .gitignore
-├── demo.gif             # Анімація демо-сесії
+├── demo.gif               # Анімація демо-сесії
 ├── example_output/
-│   ├── demo_session.md  # Повний вивід демо-сесії (tool calls + відповіді)
-│   └── report.md        # Чистий Markdown-контент відповідей агента
+│   ├── demo_session.md    # Повний вивід демо-сесії (tool calls + відповіді)
+│   └── report.md          # Чистий Markdown-контент відповідей агента
+├── CHANGELOG.md
 └── README.md
 ```
 
@@ -189,7 +199,7 @@ homework-lesson-4/
 
 | Файл | Рядків | Відповідальність |
 |------|--------|------------------|
-| `agent.py` | ~270 | Клас `ResearchAgent` зі streaming ReAct loop. `_stream_llm()` виводить токени в реальному часі. `_ToolCallAccumulator` для збору tool call deltas. XML парсер для Qwen3. Dual extraction (native + XML). |
+| `agent.py` | ~310 | Клас `ResearchAgent` зі streaming ReAct loop. `_stream_llm()` з look-ahead буфером для XML-safe streaming. Tool call budget enforcement + duplicate protection. `_ToolCallAccumulator` для tool call deltas. Dual extraction (native + XML fallback). |
 | `tools.py` | ~130 | Декоратор `@tool` — автогенерація JSON Schema з type hints + docstring. Три tool-функції. `TOOL_SCHEMAS` і `TOOL_REGISTRY` заповнюються автоматично при імпорті. |
 | `config.py` | ~100 | `Settings` (Pydantic BaseSettings) для завантаження з `.env`. `SYSTEM_PROMPT` зі структурованими секціями prompt engineering. |
 | `main.py` | ~70 | REPL: input loop, команди (exit/quit/new), виклик `agent.chat()`, error handling. |
@@ -200,7 +210,7 @@ homework-lesson-4/
 
 | Tool | Призначення | JSON Schema params | Бібліотека |
 |------|-------------|-------------------|------------|
-| `web_search` | Пошук в інтернеті через DuckDuckGo | `query` (required), `max_results` (optional) | `ddgs` |
+| `web_search` | Пошук в інтернеті через DuckDuckGo (≤4000 chars) | `query` (required), `max_results` (optional) | `ddgs` |
 | `read_url` | Витягування тексту зі сторінки (≤8000 chars) | `url` (required) | `trafilatura` |
 | `write_report` | Збереження Markdown-звіту у файл | `filename` (required), `content` (required) | `builtins` |
 
@@ -215,6 +225,21 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
 
 Декоратор автоматично створює OpenAI JSON Schema і реєструє функцію в `TOOL_REGISTRY`.
 Немає ручних JSON-описів — додаєш функцію з `@tool`, і все працює.
+
+---
+
+## Тестування
+
+```bash
+python -m pytest test_agent_parser.py test_tool_decorator.py -v
+```
+
+**33 тести** покривають два ключові компоненти:
+
+| Файл | Тестів | Що перевіряється |
+|---|---|---|
+| `test_agent_parser.py` | 15 | XML парсер: happy path, malformed XML, edge cases, whitespace |
+| `test_tool_decorator.py` | 18 | `_resolve_json_type` (Optional[T] unwrapping), auto-schema generation, TOOL_REGISTRY |
 
 ---
 
@@ -329,7 +354,10 @@ System prompt структурований за секціями з викори
 |----------|-----------|
 | Tool кидає exception | `_execute_tool()` перехоплює, повертає `"Error executing {name}: {e}"` — модель бачить помилку і може адаптуватись |
 | Невідомий tool name | Повертає список доступних tools — модель може виправити виклик |
+| Tool call budget вичерпано | Per-call check (після duplicate filter) + nudge для фінальної відповіді |
+| Duplicate tool call | Перевіряється ДО budget — не рахується в бюджет, повертає повідомлення моделі |
 | Ліміт ітерацій вичерпано | Вставляє nudge-повідомлення, робить останній LLM call для синтезу зібраної інформації |
+| XML теги в streaming | Look-ahead буфер утримує часткові теги (`<tool`), парсить після стріму |
 | LLM API недоступний | Exception пробивається у REPL → `print(f"Error: {e}")` → користувач може спробувати знову |
 | `KeyboardInterrupt` | Перехоплюється в REPL → `"Interrupted"` → можна продовжити |
 
@@ -344,6 +372,7 @@ System prompt структурований за секціями з викори
 | `trafilatura` | ≥2.0.0 | Витягування тексту зі сторінок |
 | `pydantic` | ≥2.12.0 | Валідація і серіалізація |
 | `pydantic-settings` | ≥2.12.0 | Завантаження конфігурації з .env |
+| `pytest` | ≥8.0 | Unit-тестування |
 
 **Видалені** (порівняно з lesson-3): `langgraph`, `langchain-openai`, `langchain-core`.
 

@@ -73,6 +73,7 @@ self-hosted інфраструктуру (без зовнішніх API).
 │  knowledge_search()     web_search()    read_url()   write_report()  │
 │  HybridRetriever        DDGS search     trafilatura   File I/O       │
 │  → ranked passages      → snippets      → full text   → .md file    │
+│  (≤6000 chars)          (≤4000 chars)   (≤8000 chars)                │
 └────────┬─────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -84,9 +85,9 @@ self-hosted інфраструктуру (без зовнішніх API).
 │   │  (semantic)    │  │ (keywords)   │  │  (cross-encoder HTTP)  │   │
 │   └───────┬────────┘  └──────┬───────┘  └───────────┬────────────┘   │
 │           │                  │                      │                │
-│           └──── merge + dedup ──────────────────────┘                │
+│           └── Reciprocal Rank Fusion (RRF) ────────┘                │
 │                        │                                             │
-│              top_k → rerank → top_n                                  │
+│              RRF scored → rerank → top_n                             │
 └──────────────────────────────────────────────────────────────────────┘
          │                                  │
          ▼                                  ▼
@@ -158,9 +159,11 @@ homework-lesson-5/
 ├── main.py              # Entry point — інтерактивний REPL зі streaming
 ├── agent.py             # LangGraph ReAct agent (4 tools + memory)
 ├── tools.py             # knowledge_search, web_search, read_url, write_report
-├── retriever.py         # HybridRetriever: FAISS + BM25 + Infinity reranker
+├── retriever.py         # HybridRetriever: FAISS + BM25 + RRF + Infinity reranker
+├── test_retriever.py    # Unit-тести для RRF (14 тестів)
 ├── ingest.py            # Ingestion pipeline: PDF → chunks → FAISS + BM25 JSON
 ├── tool_parser.py       # Qwen3ChatWrapper — XML tool call parser
+├── test_tool_parser.py  # Unit-тести для XML парсера (15 тестів)
 ├── config.py            # Pydantic Settings + SYSTEM_PROMPT
 ├── requirements.txt     # Залежності
 ├── .env                 # API endpoints (не комітити)
@@ -171,9 +174,11 @@ homework-lesson-5/
 │   └── retrieval-augmented-generation.pdf
 ├── index/               # Згенерований FAISS index + BM25 JSON (gitignored)
 ├── output/              # Згенеровані звіти агента (gitignored)
-└── example_output/
-    ├── report.md        # Приклад згенерованого звіту
-    └── demo_session.md  # Транскрипт демо-сесії
+├── example_output/
+│   ├── report.md        # Приклад згенерованого звіту
+│   └── demo_session.md  # Транскрипт демо-сесії
+├── CHANGELOG.md
+└── README.md
 ```
 
 ### Опис файлів
@@ -181,7 +186,7 @@ homework-lesson-5/
 | Файл | Відповідальність |
 |------|------------------|
 | `ingest.py` | Завантажує PDF з `data/`, розбиває на чанки, генерує embeddings через TEI, зберігає FAISS індекс + BM25 JSON на диск. |
-| `retriever.py` | `HybridRetriever` — FAISS semantic + BM25 lexical, дедуплікація, reranking через `InfinityReranker` (HTTP client для Infinity API). |
+| `retriever.py` | `HybridRetriever` — FAISS semantic + BM25 lexical, Reciprocal Rank Fusion (RRF), reranking через `InfinityReranker` (HTTP client для Infinity API). |
 | `tools.py` | 4 tool-функції з `@tool` декоратором LangChain. `knowledge_search` обгортає HybridRetriever. |
 | `agent.py` | Збирає LangGraph ReAct agent: ChatOpenAI → Qwen3ChatWrapper → create_react_agent з 4 tools + MemorySaver. |
 | `tool_parser.py` | Перехоплює XML tool calls від Qwen3.5 моделей і конвертує в LangChain формат (з hw3). |
@@ -194,8 +199,8 @@ homework-lesson-5/
 
 | Tool | Призначення | Бібліотека / Сервіс |
 |------|-------------|---------------------|
-| `knowledge_search` | Гібридний пошук по локальній базі знань з reranking | FAISS + BM25 + Infinity reranker |
-| `web_search` | Пошук в інтернеті через DuckDuckGo | `ddgs` |
+| `knowledge_search` | Гібридний пошук по базі знань з RRF + reranking (≤6000 chars). Optional: `source_filter`, `page_filter` | FAISS + BM25 + RRF + Infinity reranker |
+| `web_search` | Пошук в інтернеті через DuckDuckGo (≤4000 chars) | `ddgs` |
 | `read_url` | Витягування тексту зі сторінки (≤8000 chars) | `trafilatura` |
 | `write_report` | Збереження Markdown-звіту у файл | `builtins (open)` |
 
@@ -217,6 +222,38 @@ homework-lesson-5/
 - **Приватність** — дані не виходять за межі кластера
 - **Потужніші embeddings** — Qwen3-Embedding-8B (4096 dims) vs text-embedding-3-small (1536 dims)
 - **Демонструє production підхід** — self-hosted infra замість залежності від зовнішніх сервісів
+
+---
+
+## Тестування
+
+```bash
+python -m pytest test_tool_parser.py test_retriever.py -v
+```
+
+**30 тестів** покривають два ключові компоненти:
+
+### XML парсер (`test_tool_parser.py` — 15 тестів)
+
+| Категорія | Що перевіряється |
+|---|---|
+| Happy path | один/кілька tool calls, один/кілька параметрів |
+| Змішаний контент | текст до/після XML-блоків |
+| Числовий парсинг | `"10"` → `int`, `"123abc"` → `str` |
+| Унікальність ID | кожен tool call має унікальний `call_*` |
+| Порожній ввід | `""`, звичайний текст без XML |
+| Malformed XML | незакритий тег, без параметрів, зламаний параметр |
+| Whitespace | компактний формат, зайві пробіли у значеннях |
+
+### Reciprocal Rank Fusion (`test_retriever.py` — 15 тестів)
+
+| Категорія | Що перевіряється |
+|---|---|
+| RRF scoring | формула `1/(k + rank)`, сума з двох списків |
+| Multi-list merge | документ в обох списках має вищий score |
+| Deduplication | identical content, shared-prefix collision resistance |
+| Параметр `k` | вплив на розподіл scores |
+| Edge cases | порожні списки, один список, metadata preservation |
 
 ---
 
@@ -355,9 +392,9 @@ Goodbye!
     │ top_k = 10    │           │ top_k = 10    │
     └───────┬───────┘           └───────┬───────┘
             │                           │
-            └──────── merge ────────────┘
+            └─── Reciprocal Rank Fusion ─┘
                        │
-                ~15 unique docs
+             ~15 unique docs (RRF scored)
                        │
                        ▼
               ┌────────────────┐
@@ -401,6 +438,7 @@ Goodbye!
 | `trafilatura` | ≥2.0.0 | Web page text extraction |
 | `pydantic` | ≥2.12.0 | Validation and serialization |
 | `pydantic-settings` | ≥2.12.0 | Config from .env |
+| `pytest` | ≥8.0 | Unit-тестування |
 
 **Не потрібні** (порівняно з типовим RAG): `sentence-transformers` — reranking виконується
 сервером (Infinity API), а не локально.

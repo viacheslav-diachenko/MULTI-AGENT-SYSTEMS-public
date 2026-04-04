@@ -1,6 +1,7 @@
-"""Research Agent tools.
+"""Research tools: web search, URL reading, knowledge search, and report saving.
 
-Includes web tools from hw3 + RAG knowledge_search tool.
+Reused from homework-lesson-5 with write_report renamed to save_report
+for clarity in the HITL context.
 """
 
 import os
@@ -17,9 +18,7 @@ from retriever import get_retriever
 logger = logging.getLogger(__name__)
 settings = Settings()
 
-# Lazy retriever — initialized on first knowledge_search call, not at import time.
-# This prevents ImportError/FileNotFoundError when index/ hasn't been built yet,
-# allowing the rest of the agent (web_search, read_url) to still work.
+# Lazy retriever — initialized on first knowledge_search call
 _retriever = None
 
 
@@ -55,12 +54,9 @@ def knowledge_search(
     Use web_search instead for current events, recent developments (2025+),
     or topics not covered by the documents above.
 
-    You can narrow results by source file or page number using optional filters.
-
     Args:
         query: The search query string.
-        source_filter: Optional filename substring to filter results
-            (e.g. "langchain" matches "langchain.pdf").
+        source_filter: Optional filename substring to filter results.
         page_filter: Optional page number to filter results (0-indexed).
     """
     has_filters = source_filter is not None or page_filter is not None
@@ -68,8 +64,6 @@ def knowledge_search(
     try:
         retriever = _get_or_init_retriever()
         if has_filters:
-            # When filters are active, temporarily increase rerank_top_n so that
-            # post-retrieval filtering has a larger pool to choose from.
             original_top_n = retriever.reranker.top_n
             retriever.reranker.top_n = settings.filtered_rerank_top_n
             try:
@@ -85,7 +79,6 @@ def knowledge_search(
     if not docs:
         return "No relevant documents found in the knowledge base. Try web_search instead."
 
-    # Apply metadata filters (post-retrieval)
     if source_filter:
         source_lower = source_filter.lower()
         docs = [
@@ -110,7 +103,6 @@ def knowledge_search(
 
     output = "\n\n---\n\n".join(results)
 
-    # Context engineering: truncate knowledge search results
     max_len = settings.max_knowledge_content_length
     if len(output) > max_len:
         output = output[:max_len] + (
@@ -150,7 +142,6 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
 
     output = "\n\n".join(formatted)
 
-    # Context engineering: truncate search results to prevent context overflow
     max_len = settings.max_search_content_length
     if len(output) > max_len:
         output = output[:max_len] + (
@@ -199,11 +190,12 @@ def read_url(url: str) -> str:
 
 
 @tool
-def write_report(filename: str, content: str) -> str:
+def save_report(filename: str, content: str) -> str:
     """Save a Markdown report to a file.
 
-    Use this tool to save your final research report. The file will be
-    created in the output directory.
+    Use this tool to save the final research report after it has been
+    approved by the Critic. The file will be created in the output directory.
+    This operation requires user approval (HITL).
 
     Args:
         filename: Name of the file (e.g. 'rag_comparison.md').
@@ -221,7 +213,7 @@ def write_report(filename: str, content: str) -> str:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
     except OSError as e:
-        logger.error("write_report failed for path=%r: %s", filepath, e)
+        logger.error("save_report failed for path=%r: %s", filepath, e)
         return f"Failed to save report: {e}"
 
     return f"Report saved successfully: {os.path.abspath(filepath)}"

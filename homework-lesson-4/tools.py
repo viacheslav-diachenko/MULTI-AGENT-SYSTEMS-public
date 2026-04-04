@@ -7,7 +7,7 @@ Each tool is registered via the @tool decorator — no manual JSON required.
 import inspect
 import os
 import logging
-from typing import Optional, get_type_hints
+from typing import Optional, Union, get_args, get_origin, get_type_hints
 
 import trafilatura
 from ddgs import DDGS
@@ -32,6 +32,22 @@ _PY_TYPE_TO_JSON = {
 }
 
 
+def _resolve_json_type(annotation: type) -> str:
+    """Resolve a Python type annotation to a JSON Schema type string.
+
+    Handles Optional[T] (Union[T, None]) by extracting the inner type T.
+    Falls back to "string" for unknown types.
+    """
+    # Unwrap Optional[T] → T (Optional[int] is Union[int, None])
+    origin = get_origin(annotation)
+    if origin is Union:
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if args:
+            annotation = args[0]
+
+    return _PY_TYPE_TO_JSON.get(annotation, "string")
+
+
 def tool(func):
     """Register a function as an agent tool with auto-generated JSON schema."""
     hints = get_type_hints(func)
@@ -41,7 +57,7 @@ def tool(func):
     required = []
 
     for name, param in sig.parameters.items():
-        json_type = _PY_TYPE_TO_JSON.get(hints.get(name, str), "string")
+        json_type = _resolve_json_type(hints.get(name, str))
         properties[name] = {"type": json_type, "description": name}
         if param.default is inspect.Parameter.empty:
             required.append(name)
@@ -88,7 +104,17 @@ def web_search(query: str, max_results: Optional[int] = None) -> str:
         snippet = r.get("body", r.get("snippet", ""))
         formatted.append(f"{i}. **{title}**\n   URL: {url}\n   {snippet}")
 
-    return "\n\n".join(formatted)
+    output = "\n\n".join(formatted)
+
+    # Context engineering: truncate search results to prevent context overflow
+    max_len = settings.max_search_content_length
+    if len(output) > max_len:
+        output = output[:max_len] + (
+            f"\n\n[... TRUNCATED — showing first {max_len} of {len(output)} characters. "
+            f"Use read_url on the most relevant URLs above for full content.]"
+        )
+
+    return output
 
 
 @tool

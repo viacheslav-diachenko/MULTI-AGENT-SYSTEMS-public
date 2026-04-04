@@ -4,7 +4,8 @@ Replaces LangGraph's create_react_agent with a hand-rolled loop that:
 - Streams responses from the OpenAI-compatible API with tool definitions
 - Parses tool calls from the response (native or XML fallback for Qwen3)
 - Executes tools and appends results to the conversation
-- Repeats until the model produces a final text answer or the iteration limit is hit
+- Enforces tool call budget and duplicate protection
+- Repeats until the model produces a final text answer or the budget is hit
 
 No LangGraph, no LangChain — just the openai SDK and plain Python.
 """
@@ -22,6 +23,10 @@ from config import SYSTEM_PROMPT, Settings
 from tools import TOOL_REGISTRY, TOOL_SCHEMAS
 
 logger = logging.getLogger(__name__)
+
+# Tag that signals the start of an XML tool call in streamed content.
+# Used to suppress printing raw XML to stdout.
+_XML_TOOL_TAG = "<tool_call>"
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +109,7 @@ class ResearchAgent:
         self.model = settings.model_name
         self.temperature = settings.temperature
         self.max_iterations = settings.max_iterations
+        self.max_tool_calls = settings.max_tool_calls
         self.messages: list[dict] = []
 
     def reset(self) -> None:
@@ -113,9 +119,13 @@ class ResearchAgent:
     def chat(self, user_input: str) -> str:
         """Process a user message through the ReAct loop with streaming.
 
+        Enforces a hard tool call budget and duplicate call protection.
         Returns the final text answer.
         """
         self.messages.append({"role": "user", "content": user_input})
+
+        tool_call_count = 0
+        seen_calls: set[str] = set()  # "name:args_json" keys for duplicate detection
 
         for iteration in range(self.max_iterations):
             logger.debug("ReAct iteration %d/%d", iteration + 1, self.max_iterations)
@@ -164,11 +174,47 @@ class ResearchAgent:
                 ],
             })
 
-            # Execute each tool call
+            # Execute each tool call (with duplicate detection and budget check)
+            budget_exhausted = False
             for tc in tool_calls:
                 name = tc["name"]
                 args = tc["args"]
                 call_id = tc["id"]
+
+                # --- Duplicate detection (checked before budget) ---
+                call_key = f"{name}:{json.dumps(args, sort_keys=True)}"
+                if call_key in seen_calls:
+                    logger.info("Skipping duplicate tool call: %s", call_key)
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": (
+                            f"Duplicate call skipped — you already called "
+                            f"{name} with these exact arguments. "
+                            "Use the previous result or try different arguments."
+                        ),
+                    })
+                    continue
+
+                # --- Budget check (only for non-duplicate calls) ---
+                if tool_call_count >= self.max_tool_calls:
+                    logger.warning(
+                        "Tool call budget exhausted (%d/%d)",
+                        tool_call_count, self.max_tool_calls,
+                    )
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": (
+                            "Tool call budget reached. "
+                            "Please synthesize your answer from the information gathered so far."
+                        ),
+                    })
+                    budget_exhausted = True
+                    continue
+
+                seen_calls.add(call_key)
+                tool_call_count += 1
 
                 args_preview = next(
                     (v for v in args.values() if isinstance(v, str)), ""
@@ -176,7 +222,10 @@ class ResearchAgent:
                 print(f"\n  \U0001f527 [{name}] {args_preview}")
 
                 result_str = self._execute_tool(name, args)
-                print(f"  \u2705 [{name}] \u2192 {len(result_str)} chars")
+                print(
+                    f"  \u2705 [{name}] \u2192 {len(result_str)} chars"
+                    f"  ({tool_call_count}/{self.max_tool_calls})"
+                )
 
                 self.messages.append({
                     "role": "tool",
@@ -184,8 +233,15 @@ class ResearchAgent:
                     "content": result_str,
                 })
 
-        # Iteration limit reached — force final answer
-        logger.warning("Iteration limit (%d) reached, forcing final answer", self.max_iterations)
+            if budget_exhausted:
+                break
+
+        # Budget or iteration limit reached — force final answer
+        logger.warning(
+            "Forcing final answer (tool calls: %d/%d, iterations: %d/%d)",
+            tool_call_count, self.max_tool_calls,
+            iteration + 1, self.max_iterations,
+        )
         self.messages.append({
             "role": "user",
             "content": (
@@ -197,7 +253,7 @@ class ResearchAgent:
 
         final = self._stream_llm()
         content = final.content or (
-            "I was unable to complete the research within the iteration limit."
+            "I was unable to complete the research within the tool call budget."
         )
         self.messages.append({"role": "assistant", "content": content})
         return content
@@ -208,6 +264,10 @@ class ResearchAgent:
 
     def _stream_llm(self) -> _StreamResult:
         """Stream a response from the LLM, printing tokens in real time.
+
+        Buffers content that looks like XML tool calls (Qwen3 fallback) to
+        prevent raw ``<tool_call>`` tags from leaking to stdout. Text before
+        the first XML tag is printed immediately for real-time UX.
 
         Returns the fully accumulated _StreamResult with content and tool_calls.
         """
@@ -226,6 +286,10 @@ class ResearchAgent:
         content_parts: list[str] = []
         tc_accumulators: dict[int, _ToolCallAccumulator] = {}
         started_text = False
+        xml_buffering = False  # True once we detect <tool_call> in stream
+        # Look-ahead buffer: holds text that might be the start of <tool_call>.
+        # Only text confirmed NOT to be a tag prefix is printed to stdout.
+        pending_buf = ""
 
         for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -234,12 +298,37 @@ class ResearchAgent:
 
             # --- stream text content ---
             if delta.content:
-                if not started_text:
-                    sys.stdout.write("\nAgent: ")
-                    started_text = True
-                sys.stdout.write(delta.content)
-                sys.stdout.flush()
                 content_parts.append(delta.content)
+
+                if not xml_buffering:
+                    pending_buf += delta.content
+
+                    # Check if the full tag appeared in the buffer
+                    if _XML_TOOL_TAG in pending_buf:
+                        # Print only the safe text before the XML tag
+                        pre_xml = pending_buf.split(_XML_TOOL_TAG, 1)[0]
+                        if pre_xml:
+                            if not started_text:
+                                sys.stdout.write("\nAgent: ")
+                                started_text = True
+                            sys.stdout.write(pre_xml)
+                            sys.stdout.flush()
+                        xml_buffering = True
+                        pending_buf = ""
+                    elif not any(
+                        _XML_TOOL_TAG.startswith(pending_buf[i:])
+                        for i in range(max(0, len(pending_buf) - len(_XML_TOOL_TAG)), len(pending_buf))
+                        if pending_buf[i:].startswith("<")
+                    ):
+                        # No partial match — safe to flush the entire buffer
+                        if not started_text:
+                            sys.stdout.write("\nAgent: ")
+                            started_text = True
+                        sys.stdout.write(pending_buf)
+                        sys.stdout.flush()
+                        pending_buf = ""
+                    # else: buffer might be a partial tag prefix, keep accumulating
+                # If xml_buffering is True, we silently accumulate (no print)
 
             # --- accumulate tool call deltas ---
             if delta.tool_calls:
@@ -255,6 +344,14 @@ class ResearchAgent:
                             acc.name = tc_delta.function.name
                         if tc_delta.function.arguments:
                             acc.arguments += tc_delta.function.arguments
+
+        # Flush any remaining look-ahead buffer (stream ended without XML)
+        if pending_buf and not xml_buffering:
+            if not started_text:
+                sys.stdout.write("\nAgent: ")
+                started_text = True
+            sys.stdout.write(pending_buf)
+            sys.stdout.flush()
 
         if started_text:
             sys.stdout.write("\n")

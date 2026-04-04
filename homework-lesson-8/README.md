@@ -1,307 +1,243 @@
-# Домашнє завдання: мультиагентна дослідницька система (розширення hw5)
+# Мультиагентна дослідницька система
 
-Розширте свого Research Agent з `homework-lesson-5` до **мультиагентної системи** з Supervisor, який координує трьох спеціалізованих суб-агентів за патерном **Plan → Research → Critique**.
+> Homework Lesson 8 — розширення Research Agent з hw5 до мультиагентної системи
+> з Supervisor, який координує Planner, Researcher та Critic за патерном
+> Plan → Research → Critique.
 
----
+**Версія:** 1.0.0
 
-### Що змінюється порівняно з homework-5
-
-| Було (homework-lesson-5) | Стає (homework-lesson-8) |
-|-|-|
-| Один Research Agent з 4 інструментами | Supervisor + 3 суб-агенти |
-| Агент робить усе одразу | Planner досліджує домен і декомпозує задачу, Researcher виконує, Critic перевіряє |
-| Одноразове дослідження | Ітеративне: Critic може повернути Researcher на доопрацювання |
-| Без потоку затвердження | HITL: операції запису потребують підтвердження користувача |
-| Лише вільний текст | Planner і Critic повертають структурований вивід (Pydantic) |
-
----
-
-### Архітектура
+## Архітектура
 
 ```
 User (REPL)
   │
   ▼
-Supervisor Agent
+Supervisor Agent (create_agent + HITL middleware + InMemorySaver)
   │
-  ├── 1. plan(request)       → Planner Agent      → structured ResearchPlan
+  ├── 1. plan(request)       → Planner Agent      → ResearchPlan (Pydantic)
+  │                            tools: web_search, knowledge_search
   │
-  ├── 2. research(plan)      → Research Agent     → [web_search, read_url, knowledge_search]
+  ├── 2. research(plan)      → Research Agent     → findings (text)
+  │                            tools: web_search, read_url, knowledge_search
   │
-  ├── 3. critique(findings)  → Critic Agent       → structured CritiqueResult
-  │       │
-  │       ├── verdict: "APPROVE"  → go to step 4
-  │       └── verdict: "REVISE"   → back to step 2 with feedback
+  ├── 3. critique(findings)  → Critic Agent       → CritiqueResult (Pydantic)
+  │       │                    tools: web_search, read_url, knowledge_search
+  │       ├── verdict: APPROVE  → крок 4
+  │       └── verdict: REVISE   → назад до кроку 2 (макс. 2 раунди)
   │
-  └── 4. write_report(...)   → save_report tool   → HITL gated
+  └── 4. save_report(...)    → HITL gate → approve / edit / reject
 ```
 
-**Ключовий патерн:** Supervisor оркеструє ітеративний цикл — Critic може відхилити дослідження і повернути його з конкретним зворотним зв'язком. Це патерн **evaluator-optimizer** з Лекції 7.
+### Ключовий патерн
 
----
+**Evaluator-Optimizer** (з Лекції 7): Supervisor оркеструє ітеративний цикл —
+Critic може відхилити дослідження і повернути його Researcher'у з конкретним
+зворотним зв'язком. Це забезпечує якість фінального звіту.
 
-### Що потрібно реалізувати
+### Три шари абстракції
 
-#### 1. Planner Agent (новий)
+| Шар | Компоненти | Відповідальність |
+|-----|-----------|-----------------|
+| **Top: Supervisor** | Координатор | Роутинг, координація, синтез звіту |
+| **Mid: Sub-Agents** | Planner, Researcher, Critic | NL → tool calls → structured output |
+| **Bottom: Tools** | web_search, read_url, knowledge_search, save_report | Точний API з типізацією |
 
-Декомпозує запит користувача у структурований план дослідження:
+## Компоненти
 
-- Використовує параметр `response_format` функції `create_agent` для створення Pydantic-моделі:
+### Planner Agent (`agents/planner.py`)
+
+Декомпозує запит користувача у структурований план:
+- Робить попередній пошук для розуміння домену
+- Повертає `ResearchPlan` (goal, search_queries, sources_to_check, output_format)
+- Використовує `response_format` параметр `create_agent`
+
+### Research Agent (`agents/research.py`)
+
+Виконує дослідження за планом:
+- Шукає в knowledge base та інтернеті
+- Читає повні статті через `read_url`
+- Повертає текстові findings з цитатами джерел
+
+### Critic Agent (`agents/critic.py`)
+
+Оцінює якість дослідження через **незалежну верифікацію**:
+- Самостійно шукає для перевірки фактів та актуальності
+- Оцінює три виміри: **Freshness**, **Completeness**, **Structure**
+- Повертає `CritiqueResult` з verdict (APPROVE/REVISE) та конкретним зворотним зв'язком
+
+### Supervisor Agent (`supervisor.py`)
+
+Координатор з 4 tool-обгортками:
+- `plan` → Planner Agent
+- `research` → Research Agent
+- `critique` → Critic Agent
+- `save_report` → file I/O (HITL gated)
+
+### HITL Flow (`main.py`)
+
+При виклику `save_report` Supervisor зупиняється і показує превʼю звіту:
+- **approve** — зберегти звіт як є
+- **edit** — ввести feedback, Supervisor переробляє і запитує знову
+- **reject** — скасувати збереження
+
+## Структурований вивід (Pydantic)
+
+### ResearchPlan
 
 ```python
-from langchain.agents import create_agent
-
 class ResearchPlan(BaseModel):
-    goal: str = Field(description="What we are trying to answer")
-    search_queries: list[str] = Field(description="Specific queries to execute")
-    sources_to_check: list[str] = Field(description="'knowledge_base', 'web', or both")
-    output_format: str = Field(description="What the final report should look like")
-
-planner_agent = create_agent(
-    model="...",
-    tools=[web_search, knowledge_search],
-    system_prompt="...",
-    response_format=ResearchPlan,
-)
-# result["structured_response"] → validated ResearchPlan instance
+    goal: str                     # Що досліджуємо
+    search_queries: list[str]     # Конкретні пошукові запити
+    sources_to_check: list[str]   # "knowledge_base", "web", або обидва
+    output_format: str            # Формат фінального звіту
 ```
 
-- **Інструменти:** `web_search`, `knowledge_search` — Planner робить попередній пошук, щоб зрозуміти домен перед декомпозицією задачі
-- Обгорніть як `@tool`-функцію `plan(request: str)` для Supervisor
-
-#### 2. Research Agent (перевикористання з hw5)
-
-Візьміть свого Research Agent з hw5 і обгорніть як суб-агент:
-
-- **Інструменти:** `web_search`, `read_url`, `knowledge_search` (з hw5)
-- Створіть через `create_agent` (з `langchain.agents`), задайте `system_prompt`
-- Обгорніть як `@tool`-функцію `research(request: str)` для Supervisor
-- RAG-пайплайн (`ingest.py`, `retriever.py`) перевикористовується як є
-
-#### 3. Critic Agent (новий)
-
-Оцінює якість дослідження шляхом **незалежної верифікації** знахідок через ті самі джерела:
-
-- **Інструменти:** `web_search`, `read_url`, `knowledge_search` (ті самі, що й у Research Agent)
-- Critic не просто рецензує текст — він може **перевіряти факти**, шукати пропущену інформацію та верифікувати, що джерела підтримують висновки
-- Critic оцінює три виміри:
-  1. **Freshness** — чи базуються знахідки на актуальних даних? Чи є новіші джерела? Позначає застарілу інформацію
-  2. **Completeness** — чи повністю дослідження покриває запит користувача? Чи є непокриті аспекти або пропущені підтеми?
-  3. **Structure** — чи добре організовані знахідки, чи логічно структуровані, чи готові стати звітом?
-- Використовує параметр `response_format` функції `create_agent` для створення Pydantic-моделі (працює разом з інструментами — агент спочатку викликає інструменти, потім повертає структурований вивід):
+### CritiqueResult
 
 ```python
 class CritiqueResult(BaseModel):
     verdict: Literal["APPROVE", "REVISE"]
-    is_fresh: bool = Field(description="Is the data up-to-date and based on recent sources?")
-    is_complete: bool = Field(description="Does the research fully cover the user's original request?")
-    is_well_structured: bool = Field(description="Are findings logically organized and ready for a report?")
-    strengths: list[str] = Field(description="What is good about the research")
-    gaps: list[str] = Field(description="What is missing, outdated, or poorly structured")
-    revision_requests: list[str] = Field(description="Specific things to fix if verdict is REVISE")
-
-critic_agent = create_agent(
-    model="...",
-    tools=[web_search, read_url, knowledge_search],
-    system_prompt="...",
-    response_format=CritiqueResult,
-)
-# result["structured_response"] → validated CritiqueResult instance
+    is_fresh: bool                # Дані актуальні?
+    is_complete: bool             # Повне покриття запиту?
+    is_well_structured: bool      # Логічна структура?
+    strengths: list[str]          # Що добре
+    gaps: list[str]               # Що пропущено
+    revision_requests: list[str]  # Що виправити (якщо REVISE)
 ```
 
-- Обгорніть як `@tool`-функцію `critique(findings: str)` для Supervisor
-- System prompt має наголошувати: перевіряти freshness відносно поточної дати, перевіряти покриття відносно оригінального запиту, забезпечити логічну структуру
+## Встановлення та запуск
 
-#### 4. Supervisor Agent
+### Передумови
 
-Координатор, що оркеструє цикл Plan → Research → Critique:
+- Python 3.10+
+- SGLang з Qwen3.5-35B-A3B (або OpenAI-compatible endpoint)
+- TEI з Qwen3-Embedding-8B (для embeddings)
+- Infinity з BAAI/bge-reranker-v2-m3 (для reranking)
 
-- **Інструменти:** `plan`, `research`, `critique`, `save_report` (визначені в `tools.py`, захищені HITL)
-- System prompt з правилами координації:
-  1. Завжди починати з `plan` для декомпозиції запиту
-  2. Викликати `research` з планом
-  3. Викликати `critique` для оцінки знахідок
-  4. Якщо verdict — `REVISE` — викликати `research` знову зі зворотним зв'язком від Critic (максимум 2 раунди доопрацювання)
-  5. Якщо verdict — `APPROVE` — скласти фінальний markdown-звіт і викликати `save_report` для збереження
-- Checkpointer: `InMemorySaver` (необхідний для HITL interrupt/resume)
+### Встановлення
 
-#### 5. HITL на save_report (`main.py`)
-
-`save_report` — це **операція запису** в Supervisor — вона потребує затвердження користувача:
-
-- Використовуйте `HumanInTheLoopMiddleware` (з `langchain.agents.middleware`) для захисту операцій запису:
-
-```python
-from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langgraph.types import Command
-
-supervisor = create_agent(
-    model="...",
-    tools=[plan, research, critique, save_report],
-    system_prompt="...",
-    middleware=[
-        HumanInTheLoopMiddleware(interrupt_on={"save_report": True}),
-    ],
-    checkpointer=InMemorySaver(),
-)
+```bash
+cd homework-lesson-8
+pip install -r requirements.txt
+cp .env.example .env
+# Відредагуйте .env — вкажіть URL ваших сервісів
 ```
 
-- Стрімте відповіді Supervisor у REPL
-- При виникненні interrupt покажіть запропонований звіт (ім'я файлу + превʼю вмісту)
-- Приймайте від користувача одну з трьох дій:
-  - `approve` — зберегти звіт як є
-  - `edit` — користувач вводить свій фідбек (що змінити/доповнити), Supervisor переробляє звіт і знову запитує затвердження
-  - `reject` — скасувати збереження повністю
-- Відновлюйте граф зі структурованим форматом рішення:
+### Побудова індексу (RAG)
 
-```python
-# Approve:
-supervisor.invoke(
-    Command(resume={"decisions": [{"type": "approve"}]}),
-    config={"configurable": {"thread_id": thread_id}},
-)
-
-# Edit — user provides feedback, Supervisor revises and calls save_report again:
-supervisor.invoke(
-    Command(resume={"decisions": [{"type": "edit", "edited_action": {"feedback": user_feedback}}]}),
-    config={"configurable": {"thread_id": thread_id}},
-)
-
-# Reject:
-supervisor.invoke(
-    Command(resume={"decisions": [{"type": "reject", "message": "reason"}]}),
-    config={"configurable": {"thread_id": thread_id}},
-)
+```bash
+python ingest.py
 ```
 
-#### 6. Промпти та конфігурація
+### Запуск
 
-- System prompts для всіх 4 агентів винесені в `config.py`
-- Конфігурація (API-ключі, назва моделі, шляхи, параметри RAG) в `config.py` / `.env`
+```bash
+python main.py
+```
 
----
+### Приклад сесії
 
-### Структура проєкту
+```
+You: Порівняй naive RAG та sentence-window retrieval. Напиши звіт.
+
+  [Supervisor -> plan] Порівняй naive RAG та sentence-window retrieval...
+  <- [plan] 450 chars
+
+  [Supervisor -> research] Research these topics: 1) naive RAG approach...
+  <- [research] 3200 chars
+
+  [Supervisor -> critique] Findings: ...
+  <- [critique] 380 chars
+
+  [Supervisor -> research] Revision: Find 2025-2026 benchmarks...
+  <- [research] 2800 chars
+
+  [Supervisor -> critique] Updated findings: ...
+  <- [critique] 290 chars
+
+  [Supervisor -> save_report] rag_comparison.md
+
+  ============================================================
+    ACTION REQUIRES APPROVAL
+  ============================================================
+    Tool:     save_report
+    Filename: rag_comparison.md
+    Preview:
+  # Порівняння RAG-підходів...
+  ============================================================
+
+    approve / edit / reject: approve
+
+    Approved! Report saved to output/rag_comparison.md
+```
+
+## Структура проєкту
 
 ```
 homework-lesson-8/
-├── main.py              # REPL with HITL interrupt/resume loop
-├── supervisor.py        # Supervisor agent + agent-as-tool wrappers
+├── main.py              # REPL з HITL interrupt/resume
+├── supervisor.py        # Supervisor + agent-as-tool обгортки
 ├── agents/
 │   ├── __init__.py
-│   ├── planner.py       # Planner Agent (uses ResearchPlan from schemas.py)
-│   ├── research.py      # Research Agent (reuses hw5 tools)
-│   └── critic.py        # Critic Agent (uses CritiqueResult from schemas.py)
-├── schemas.py           # Pydantic models: ResearchPlan, CritiqueResult
-├── tools.py             # Reused from hw5: web_search, read_url, knowledge_search + save_report
-├── retriever.py         # Reused from hw5
-├── ingest.py            # Reused from hw5
-├── config.py            # Prompts + settings
-├── requirements.txt     # Dependencies (add langgraph to hw5 deps)
-├── data/                # Documents for RAG (from hw5)
-└── .env                 # API keys (do not commit!)
+│   ├── planner.py       # Planner Agent (ResearchPlan)
+│   ├── research.py      # Research Agent
+│   └── critic.py        # Critic Agent (CritiqueResult)
+├── schemas.py           # Pydantic: ResearchPlan, CritiqueResult
+├── tools.py             # web_search, read_url, knowledge_search, save_report
+├── retriever.py         # Hybrid retriever (FAISS + BM25 + RRF + Infinity)
+├── tool_parser.py       # Qwen3ChatWrapper (XML tool call parser)
+├── ingest.py            # PDF → chunks → FAISS + BM25
+├── config.py            # Settings + 4 system prompts
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── data/                # PDF-документи для RAG
+│   ├── langchain.pdf
+│   ├── large-language-model.pdf
+│   └── retrieval-augmented-generation.pdf
+├── tests/
+│   └── test_schemas.py  # 7 тестів для Pydantic-схем
+├── CHANGELOG.md
+└── README.md
 ```
 
----
+## Конфігурація
 
-### Очікуваний результат
+Всі параметри налаштовуються через `.env`:
 
-1. **Ingestion працює** — `python ingest.py` будує FAISS-індекс (так само як у hw5)
-2. **Planner декомпозує** — запит користувача розбивається у структурований `ResearchPlan`
-3. **Researcher виконує** — слідує плану, використовує web + knowledge base
-4. **Critic оцінює** — повертає структурований `CritiqueResult` з verdict
-5. **Ітерація працює** — якщо Critic каже `REVISE`, Researcher повертається з конкретним зворотним зв'язком
-6. **HITL працює** — коли Supervisor викликає `save_report`, користувач бачить звіт і затверджує/відхиляє
-7. **Звіт збережено** — після затвердження звіт зберігається у `./output/`
+| Параметр | За замовчуванням | Опис |
+|----------|-----------------|------|
+| `API_BASE` | `http://localhost:8000/v1` | LLM endpoint (SGLang) |
+| `MODEL_NAME` | `qwen3.5-35b-a3b` | Модель |
+| `MAX_REVISION_ROUNDS` | `2` | Макс. раундів Critic→Researcher |
+| `MAX_ITERATIONS` | `50` | Recursion limit для Supervisor |
+| `MAX_SEARCH_CONTENT_LENGTH` | `4000` | Ліміт web_search |
+| `MAX_URL_CONTENT_LENGTH` | `8000` | Ліміт read_url |
+| `MAX_KNOWLEDGE_CONTENT_LENGTH` | `6000` | Ліміт knowledge_search |
 
-Приклад консольного виводу:
+Повний список — у `.env.example`.
 
+## Тестування
+
+```bash
+python -m pytest tests/ -v
 ```
-You: Compare RAG approaches: naive, sentence-window, and parent-child. Write a report.
 
-[Supervisor → Planner]
-🔧 plan("Compare RAG approaches: naive, sentence-window, parent-child")
-  📎 ResearchPlan(
-       goal="Compare three RAG retrieval strategies",
-       search_queries=["naive RAG approach", "sentence-window retrieval", "parent-child RAG"],
-       sources_to_check=["knowledge_base", "web"],
-       output_format="comparison table + pros/cons for each approach"
-     )
+## Що перевикористано з HW5
 
-[Supervisor → Researcher]  (round 1)
-🔧 research("Research these topics: 1) naive RAG approach 2) sentence-window ...")
-  🔧 knowledge_search("RAG retrieval approaches")
-  📎 [3 documents found]
-  🔧 web_search("sentence-window vs parent-child RAG retrieval")
-  📎 [5 results found]
+- `retriever.py` — HybridRetriever (FAISS + BM25 + RRF + Infinity reranker)
+- `tool_parser.py` — Qwen3ChatWrapper для XML tool call parsing
+- `ingest.py` — Pipeline: PDF → chunks → embeddings → FAISS + BM25
+- Tools: `web_search`, `read_url`, `knowledge_search` (без змін)
+- `data/` — PDF-документи
 
-[Supervisor → Critic]
-🔧 critique("Findings: ... [research results] ...")
-  🔧 web_search("parent-child chunking RAG 2025 2026")  ← checking freshness
-  📎 [3 results — newer approaches exist]
-  🔧 web_search("RAG retrieval benchmarks 2026")        ← verifying data is current
-  📎 [2 results — research used outdated 2023 benchmarks]
-  📎 CritiqueResult(
-       verdict="REVISE",
-       is_fresh=False,
-       is_complete=False,
-       is_well_structured=True,
-       strengths=["Good coverage of naive and sentence-window", "Well-structured comparison"],
-       gaps=["Benchmarks from 2023 — outdated", "Parent-child approach barely covered",
-             "Missing recent developments in parent-child chunking"],
-       revision_requests=["Find 2025-2026 benchmarks comparing the three approaches",
-                          "More detail on parent-child chunking strategy"]
-     )
+## Що нового порівняно з HW5
 
-[Supervisor → Researcher]  (round 2)
-🔧 research("Find: 1) benchmarks comparing RAG approaches 2) parent-child chunking details")
-  🔧 web_search("RAG retrieval benchmarks naive vs sentence-window vs parent-child")
-  📎 [4 results found]
-  🔧 read_url("https://example.com/rag-benchmarks")
-  📎 [3200 chars]
-
-[Supervisor → Critic]
-🔧 critique("Updated findings: ... [round 1 + round 2 results] ...")
-  🔧 web_search("RAG retrieval accuracy benchmarks 2026")   ← spot-checking updated data
-  📎 [2 results — confirms benchmark numbers are current]
-  📎 CritiqueResult(
-       verdict="APPROVE",
-       is_fresh=True,
-       is_complete=True,
-       is_well_structured=True,
-       strengths=["Up-to-date benchmarks", "All three approaches covered in depth",
-                  "Clear structure with comparison table"],
-       gaps=[],
-       revision_requests=[]
-     )
-
-[Supervisor → save_report]
-🔧 save_report(filename="rag_comparison.md", content="# Comparison of RAG Approaches...")
-
-  ============================================================
-  ⏸️  ACTION REQUIRES APPROVAL
-  ============================================================
-    Tool:  save_report
-    Args:  {"filename": "rag_comparison.md", "content": "# Comparison of RAG..."}
-
-  👉 approve / edit / reject: edit
-  ✏️  Your feedback: Add a summary table at the top and include latency benchmarks
-
-[Supervisor revises report based on feedback]
-🔧 save_report(filename="rag_comparison.md", content="# Comparison of RAG Approaches\n\n| Approach | ...")
-
-  ============================================================
-  ⏸️  ACTION REQUIRES APPROVAL
-  ============================================================
-    Tool:  save_report
-    Args:  {"filename": "rag_comparison.md", "content": "# Comparison of RAG..."}
-
-  👉 approve / edit / reject: approve
-
-  ✅ Approved! Report saved to output/rag_comparison.md
-
-Agent: I've completed the research with 2 rounds of investigation. The Critic
-       identified gaps in parent-child coverage and benchmarks, which were
-       addressed in round 2. After your feedback I added a summary table and
-       latency benchmarks. Report saved to output/rag_comparison.md.
-```
+| Було (HW5) | Стало (HW8) |
+|------------|------------|
+| Один Research Agent з 4 tools | Supervisor + 3 суб-агенти |
+| Агент робить усе одразу | Plan → Research → Critique цикл |
+| Одноразове дослідження | Ітеративне (макс. 2 раунди ревізії) |
+| Без підтвердження | HITL: save_report потребує approve/edit/reject |
+| Лише вільний текст | Structured output (Pydantic) для Planner і Critic |
+| `create_react_agent` (langgraph) | `create_agent` (langchain 1.x) |

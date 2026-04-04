@@ -1,0 +1,75 @@
+# Changelog
+
+Усі значущі зміни в проєкті документуються в цьому файлі.
+
+Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
+
+## [1.2.1] - 2026-03-24
+
+### Змінено
+
+- Видалено мертвий параметр `max_iterations` з `config.py` та `.env.example` —
+  він не використовувався після переходу на `max_tool_calls` → `recursion_limit`.
+- `example_output/demo_session.md` — додано disclaimer, що сесія записана з v1.0.0
+  (до budget enforcement), тому кількість tool calls не відповідає поточним лімітам.
+
+## [1.2.0] - 2026-03-24
+
+### Додано
+
+- **Tool call budget enforcement** — `max_tool_calls=5` в config, `recursion_limit`
+  обчислюється автоматично (`max_tool_calls * 2 + 2`). `GraphRecursionError`
+  перехоплюється з user-friendly повідомленням замість stack trace.
+- `pytest>=8.0` до `requirements.txt` — тести тепер працюють з базової установки.
+- `.pytest_cache/` до `.gitignore`.
+
+### Змінено
+
+- `max_iterations` знижено з 30 до 15 (більш розумний default).
+- `.env.example` — синхронізовано з `config.py`: додано `MAX_SEARCH_CONTENT_LENGTH`,
+  `MAX_TOOL_CALLS`, оновлено `MAX_ITERATIONS`.
+
+### Виправлено
+
+- **`Qwen3ChatWrapper` втрачала metadata** — при конвертації XML tool calls у
+  LangChain формат не зберігались `id`, `usage_metadata`, `additional_kwargs`
+  оригінального `AIMessage` та `generation_info` оригінального `ChatGeneration`.
+  Тепер всі поля forward-яться для коректного трейсингу і обліку токенів.
+
+## [1.1.0] - 2026-03-24
+
+### Додано
+
+- **Unit-тести для XML парсера** (`test_tool_parser.py`) — 15 тестів, що покривають
+  happy path, malformed XML, edge cases, числовий парсинг та whitespace handling.
+- **Truncation для `web_search`** — результати пошуку тепер обрізаються до
+  `max_search_content_length` (за замовчуванням 4000 символів) з інформативним
+  повідомленням, що спрямовує агента використати `read_url` для деталей.
+- Новий параметр конфігурації `MAX_SEARCH_CONTENT_LENGTH` в `config.py` для
+  незалежного контролю ліміту пошукових результатів.
+- Секція "Тестування" в `README.md`.
+- Цей `CHANGELOG.md`.
+
+### Змінено
+
+- `README.md` — оновлено опис context engineering (тепер обидва інструменти),
+  діаграму архітектури (truncation для обох tools), структуру проєкту
+  (додано `test_tool_parser.py` та `CHANGELOG.md`).
+
+### Виправлено
+
+- **Context overflow у `web_search`** — раніше результати пошуку не мали обмеження
+  довжини (на відміну від `read_url`), що могло призвести до переповнення
+  контекстного вікна LLM при кількох послідовних пошуках.
+
+## [1.0.0] - 2026-03-XX
+
+### Додано
+
+- Початкова реалізація Research Agent на базі LangGraph `create_react_agent`.
+- Три інструменти: `web_search` (DuckDuckGo), `read_url` (trafilatura), `write_report` (file I/O).
+- `Qwen3ChatWrapper` — XML tool call parser для сумісності з sglang/Qwen3.5 моделями.
+- `MemorySaver` checkpointer для збереження контексту бесіди.
+- Pydantic Settings для конфігурації через `.env`.
+- Інтерактивний REPL з streaming виводом та emoji-індикаторами tool calls.
+- Context engineering: truncation `read_url` до 8000 символів.

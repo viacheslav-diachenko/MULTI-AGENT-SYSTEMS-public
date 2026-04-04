@@ -19,9 +19,14 @@ class Settings(BaseSettings):
 
     # Web search
     max_search_results: int = 5
+    max_search_content_length: int = 4000
     max_url_content_length: int = 8000
 
-    # RAG — Embeddings (TEI with OpenAI-compatible API)
+    # RAG — Knowledge search
+    max_knowledge_content_length: int = 6000
+
+    # RAG — Embeddings (OpenAI-compatible API, e.g. TEI or OpenAI)
+    embedding_api_key: SecretStr = SecretStr("not-needed")
     embedding_base_url: str = "http://10.43.45.148:7998/v1"
     embedding_model: str = "Qwen/Qwen3-Embedding-8B"
 
@@ -35,6 +40,7 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     retrieval_top_k: int = 10
     rerank_top_n: int = 3
+    filtered_rerank_top_n: int = 10
 
     # Agent
     output_dir: str = "output"

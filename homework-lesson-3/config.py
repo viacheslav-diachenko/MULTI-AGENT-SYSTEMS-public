@@ -25,8 +25,11 @@ class Settings(BaseSettings):
 
     # Context engineering limits
     max_search_results: int = 5
+    max_search_content_length: int = 4000
     max_url_content_length: int = 8000
-    max_iterations: int = 30
+
+    # Agent iteration limits
+    max_tool_calls: int = 5
 
     # Output
     output_dir: str = "output"

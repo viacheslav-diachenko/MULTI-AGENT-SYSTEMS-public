@@ -117,15 +117,9 @@ class Qwen3ChatWrapper(BaseChatModel):
                     new_msg = AIMessage(
                         content=remaining,
                         tool_calls=tool_calls,
-                        id=msg.id,
                         response_metadata=msg.response_metadata,
-                        usage_metadata=msg.usage_metadata,
-                        additional_kwargs=msg.additional_kwargs,
                     )
-                    new_generations.append(ChatGeneration(
-                        message=new_msg,
-                        generation_info=gen.generation_info,
-                    ))
+                    new_generations.append(ChatGeneration(message=new_msg))
                     continue
             new_generations.append(gen)
 
