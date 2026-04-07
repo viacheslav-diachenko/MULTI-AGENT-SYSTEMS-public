@@ -201,6 +201,10 @@ def save_report(filename: str, content: str) -> str:
             file_handle.write(content)
     except OSError as e:
         logger.error("save_report failed for path=%r: %s", filepath, e)
-        return f"Failed to save report: {e}"
+        # Fail loud: surface the real error to the LLM/tool runtime instead
+        # of swallowing it in a success-shaped string that the REPL truncates.
+        raise RuntimeError(f"Failed to save report to {filepath}: {e}") from e
 
-    return f"Report saved successfully: {os.path.abspath(filepath)}"
+    abs_path = os.path.abspath(filepath)
+    logger.info("Report saved: %s", abs_path)
+    return f"Report saved successfully: {abs_path}"

@@ -5,6 +5,8 @@ an iterative evaluator-optimizer pattern. save_report is gated by
 HumanInTheLoopMiddleware for user approval.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from typing import Any
@@ -26,6 +28,13 @@ settings = Settings()
 # Thread-scoped revision counters — keyed by thread_id so conversations
 # don't interfere with each other and budgets survive checkpoint/resume.
 _revision_counts: dict[str, int] = {}
+
+# Shared checkpointer + per-thread Supervisor cache so multi-turn
+# conversations preserve their LangGraph state across REPL turns.
+# (Previously each build_supervisor() call minted a fresh InMemorySaver,
+# which silently erased conversation history on every follow-up.)
+_checkpointer = InMemorySaver()
+_supervisors: dict[str, Any] = {}
 
 
 def reset_revision_counter(thread_id: str) -> None:
@@ -170,8 +179,8 @@ def critique(original_request: str, plan_summary: str, findings: str) -> str:
     return _extract_message_text(result)
 
 
-def build_supervisor():
-    """Create a fresh Supervisor agent with a dynamic prompt and checkpointer."""
+def _build_supervisor_instance(checkpointer):
+    """Create a Supervisor agent bound to the given checkpointer."""
     return create_agent(
         create_llm(settings),
         tools=[plan, research, critique, _save_report_tool],
@@ -181,5 +190,37 @@ def build_supervisor():
                 interrupt_on={"save_report": True},
             ),
         ],
-        checkpointer=InMemorySaver(),
+        checkpointer=checkpointer,
     )
+
+
+def build_supervisor():
+    """Create a one-shot Supervisor with its own private InMemorySaver.
+
+    Kept for backwards compatibility and ad-hoc tooling. The REPL should
+    use :func:`get_or_create_supervisor` to preserve conversation state
+    across turns.
+    """
+    return _build_supervisor_instance(InMemorySaver())
+
+
+def get_or_create_supervisor(thread_id: str, *, fresh: bool = False):
+    """Return a Supervisor bound to the shared module-level checkpointer.
+
+    The first call for a given ``thread_id`` builds a fresh agent;
+    subsequent calls return the cached instance so LangGraph checkpoints
+    and conversation history persist across REPL turns. Pass
+    ``fresh=True`` (or call :func:`reset_thread`) to discard the cached
+    instance when the user explicitly starts a new conversation.
+    """
+    if fresh:
+        _supervisors.pop(thread_id, None)
+    if thread_id not in _supervisors:
+        _supervisors[thread_id] = _build_supervisor_instance(_checkpointer)
+    return _supervisors[thread_id]
+
+
+def reset_thread(thread_id: str) -> None:
+    """Drop cached Supervisor and revision counter for a thread."""
+    _supervisors.pop(thread_id, None)
+    _revision_counts.pop(thread_id, None)

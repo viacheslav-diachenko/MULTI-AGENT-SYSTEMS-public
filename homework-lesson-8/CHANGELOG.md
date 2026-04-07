@@ -4,6 +4,27 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.3.2] - 2026-04-07
+
+### Виправлено
+
+- **[P1] Втрачений multi-turn state (Issue #R1)** — `build_supervisor()`
+  створював новий `InMemorySaver` на кожен user turn, тому LangGraph
+  checkpoint-и й історія розмови безшумно зникали між запитами.
+  Додано shared `_checkpointer` + `_supervisors: dict[str, Agent]` і
+  новий `get_or_create_supervisor(thread_id)`, який REPL тепер
+  використовує замість `build_supervisor()`. Команда `new` викликає
+  `reset_thread(old_id)` і створює новий `thread_id`.
+- **[P1] `save_report` глушила помилки (Issue #R2)** — у разі `OSError`
+  повертався string `"Failed to save report: ..."`, який REPL друкував
+  тільки як довжину. Тепер `save_report` піднімає `RuntimeError`, а
+  `process_stream_step` показує preview тексту tool-відповіді (до 300
+  символів) + статус, тому і успішний шлях, і помилка реально видно.
+
+### Додано
+
+- `get_or_create_supervisor` / `reset_thread` у `supervisor.py`.
+
 ## [1.3.1] - 2026-04-04
 
 ### Виправлено

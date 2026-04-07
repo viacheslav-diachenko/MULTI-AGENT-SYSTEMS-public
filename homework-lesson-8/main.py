@@ -11,7 +11,11 @@ import uuid
 from langgraph.types import Command, Interrupt
 
 from config import Settings
-from supervisor import build_supervisor, reset_revision_counter
+from supervisor import (
+    get_or_create_supervisor,
+    reset_revision_counter,
+    reset_thread,
+)
 
 # Configure logging — suppress library noise
 logging.basicConfig(
@@ -203,8 +207,12 @@ def process_stream_step(step: dict) -> None:
                     print(f"\n  [Supervisor -> {tool_call['name']}] {args_preview}")
 
             elif hasattr(msg, "name") and getattr(msg, "type", "") == "tool":
-                content_len = len(str(msg.content))
-                print(f"  <- [{msg.name}] {content_len} chars")
+                content_str = str(msg.content)
+                preview = content_str[:300].replace("\n", " ")
+                suffix = "..." if len(content_str) > 300 else ""
+                status = getattr(msg, "status", None)
+                status_tag = f" [{status}]" if status and status != "success" else ""
+                print(f"  <- [{msg.name}]{status_tag} ({len(content_str)} chars) {preview}{suffix}")
 
             elif hasattr(msg, "content") and msg.content:
                 msg_type = getattr(msg, "type", "")
@@ -245,6 +253,7 @@ def main() -> None:
             break
 
         if user_input.lower() == "new":
+            reset_thread(thread_id)
             thread_id = uuid.uuid4().hex
             _current_config["configurable"]["thread_id"] = thread_id
             _current_supervisor = None
@@ -252,8 +261,10 @@ def main() -> None:
             continue
 
         logger.info("User query: %s", user_input)
+        # Reset the per-turn research revision budget, but keep the cached
+        # Supervisor + checkpointer so LangGraph sees prior conversation state.
         reset_revision_counter(thread_id)
-        _current_supervisor = build_supervisor()
+        _current_supervisor = get_or_create_supervisor(thread_id)
 
         try:
             for step in _current_supervisor.stream(
