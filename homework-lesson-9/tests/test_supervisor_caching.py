@@ -118,7 +118,18 @@ def test_reset_thread_fallback_clears_in_memory_storage(counting_builder, monkey
         ("thread-b", "", "channel", "v1"): b"keep",
     }
 
-    monkeypatch.delattr(supervisor._checkpointer, "delete_thread", raising=False)
+    # Force the fallback branch: delattr only removes instance attributes,
+    # but InMemorySaver defines delete_thread on the class in current
+    # langgraph releases, so we overshadow it with a raising stub on the
+    # instance instead. This guarantees _clear_checkpointer_state cannot
+    # take the delete_thread happy path and must exercise the manual
+    # storage / writes / blobs cleanup we are actually testing.
+    def _raise_unavailable(_tid):
+        raise RuntimeError("delete_thread unavailable (forced for test)")
+
+    monkeypatch.setattr(
+        supervisor._checkpointer, "delete_thread", _raise_unavailable, raising=False,
+    )
     monkeypatch.setattr(supervisor._checkpointer, "storage", fake_storage, raising=False)
     monkeypatch.setattr(supervisor._checkpointer, "writes", fake_writes, raising=False)
     monkeypatch.setattr(supervisor._checkpointer, "blobs", fake_blobs, raising=False)

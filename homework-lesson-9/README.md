@@ -6,6 +6,11 @@
 
 **Версія:** 1.1.2
 
+## Що покращено в 1.1.2
+
+- fallback cleanup у `reset_thread` тепер відповідає реальному layout `InMemorySaver`: `storage.pop(thread_id, None)` для top-level dict, tuple-фільтрація залишена тільки для `writes`/`blobs`
+- regression-тест переписано під реальну форму `storage` і примусово бере fallback-гілку, щоб ловити цей клас багів, а не перевірку monkey-patch
+
 ## Що покращено в 1.1.1
 
 - `.env` lookup тепер теж прив'язаний до `PROJECT_ROOT`: `Settings.model_config['env_file']` — абсолютний шлях, cwd процесу більше не впливає ні на paths, ні на endpoints
