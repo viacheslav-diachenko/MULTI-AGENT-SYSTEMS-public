@@ -7,10 +7,24 @@ current date/time in their instructions.
 """
 
 from datetime import datetime
+from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings
 from langchain_openai import ChatOpenAI
+
+# Anchor relative paths and .env lookup to the hw8 project root so
+# launching the agent from any cwd (tmux/pm2/service) still reads and
+# writes files deterministically. Without this, both the .env file and
+# DATA_DIR/INDEX_DIR/OUTPUT_DIR would resolve against the process cwd.
+PROJECT_ROOT: Path = Path(__file__).resolve().parent
+
+
+def _resolve_path(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    return str(path)
 
 
 class Settings(BaseSettings):
@@ -52,7 +66,18 @@ class Settings(BaseSettings):
     max_iterations: int = 50
     max_revision_rounds: int = 2
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": str(PROJECT_ROOT / ".env"),
+        "env_file_encoding": "utf-8",
+    }
+
+    @model_validator(mode="after")
+    def _normalise_paths(self) -> "Settings":
+        """Rewrite filesystem paths to absolute values anchored at PROJECT_ROOT."""
+        for attr in ("data_dir", "index_dir", "output_dir"):
+            value = getattr(self, attr)
+            object.__setattr__(self, attr, _resolve_path(value))
+        return self
 
 
 def create_llm(settings: Settings | None = None) -> ChatOpenAI:

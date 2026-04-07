@@ -204,23 +204,58 @@ def build_supervisor():
     return _build_supervisor_instance(InMemorySaver())
 
 
+def _clear_checkpointer_state(thread_id: str) -> None:
+    """Best-effort wipe of all LangGraph checkpoints for a thread.
+
+    The shared ``InMemorySaver`` keys checkpoints by ``thread_id``, so
+    popping the cached Supervisor alone is not enough — a rebuilt
+    Supervisor would still recover prior conversation state. This
+    helper prefers the documented ``delete_thread`` API and falls back
+    to clearing InMemorySaver's internal dict storage if that API is
+    unavailable on the installed langgraph version.
+    """
+    deleter = getattr(_checkpointer, "delete_thread", None)
+    if callable(deleter):
+        try:
+            deleter(thread_id)
+            return
+        except Exception:  # pragma: no cover — defensive
+            logger.warning(
+                "delete_thread failed for thread %s; falling back to manual cleanup",
+                thread_id,
+                exc_info=True,
+            )
+
+    for attr_name in ("storage", "writes", "blobs"):
+        store = getattr(_checkpointer, attr_name, None)
+        if not isinstance(store, dict):
+            continue
+        stale_keys = [
+            key for key in list(store.keys())
+            if isinstance(key, tuple) and key and key[0] == thread_id
+        ]
+        for key in stale_keys:
+            store.pop(key, None)
+
+
 def get_or_create_supervisor(thread_id: str, *, fresh: bool = False):
     """Return a Supervisor bound to the shared module-level checkpointer.
 
     The first call for a given ``thread_id`` builds a fresh agent;
     subsequent calls return the cached instance so LangGraph checkpoints
     and conversation history persist across REPL turns. Pass
-    ``fresh=True`` (or call :func:`reset_thread`) to discard the cached
-    instance when the user explicitly starts a new conversation.
+    ``fresh=True`` (or call :func:`reset_thread`) to discard both the
+    cached agent *and* any checkpoints stored under ``thread_id``.
     """
     if fresh:
-        _supervisors.pop(thread_id, None)
+        reset_thread(thread_id)
     if thread_id not in _supervisors:
         _supervisors[thread_id] = _build_supervisor_instance(_checkpointer)
     return _supervisors[thread_id]
 
 
 def reset_thread(thread_id: str) -> None:
-    """Drop cached Supervisor and revision counter for a thread."""
+    """Drop cached Supervisor, revision counter, and saved checkpoints."""
     _supervisors.pop(thread_id, None)
     _revision_counts.pop(thread_id, None)
+    _clear_checkpointer_state(thread_id)

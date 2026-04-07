@@ -4,7 +4,13 @@
 > `homework-lesson-8` на архітектуру з протоколами комунікації:
 > **MCP** для інструментів і **ACP** для самих агентів.
 
-**Версія:** 1.1.0
+**Версія:** 1.1.1
+
+## Що покращено в 1.1.1
+
+- `.env` lookup тепер теж прив'язаний до `PROJECT_ROOT`: `Settings.model_config['env_file']` — абсолютний шлях, cwd процесу більше не впливає ні на paths, ні на endpoints
+- `reset_thread()` та `fresh=True` повністю чистять стан checkpointer-а (через `delete_thread` або ручну зачистку `InMemorySaver.storage`), а не тільки викидають cached Python-екземпляр
+
 
 ## Що покращено в 1.1.0
 

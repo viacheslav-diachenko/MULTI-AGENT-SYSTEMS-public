@@ -55,3 +55,14 @@ def test_paths_stable_regardless_of_cwd(monkeypatch, tmp_path):
         assert Path(settings.output_dir).is_absolute()
     finally:
         os.chdir(cwd_before)
+
+
+def test_env_file_is_anchored_at_project_root():
+    """Settings.model_config['env_file'] must be an absolute path under
+    PROJECT_ROOT, otherwise Pydantic would resolve it against the
+    process cwd and silently skip the real .env file when the server
+    is launched from another directory."""
+    env_file = Settings.model_config.get("env_file")
+    assert env_file is not None
+    assert os.path.isabs(env_file), f"env_file must be absolute, got {env_file!r}"
+    assert Path(env_file).parent == PROJECT_ROOT

@@ -4,6 +4,37 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.1.1] - 2026-04-07
+
+### Виправлено
+
+- **[P1] `.env` lookup залежав від cwd** — `Settings.model_config`
+  тримав `env_file=".env"`, тому Pydantic резолвив його через cwd
+  процесу. Запуск MCP/ACP сервера з іншої директорії мовчки пропускав
+  реальний `.env` і падав у defaults. Тепер `env_file =
+  str(PROJECT_ROOT / ".env")`, і 1.1.0 контракт «cwd більше не впливає»
+  нарешті стосується і endpoint-ів / API base / портів.
+- **[P2] `reset_thread()` / `fresh=True` не чистили state checkpointer-а** —
+  евікція видаляла лише cached Python-екземпляр Supervisor-а, а
+  shared `InMemorySaver` зберігав checkpoints по тому самому
+  `thread_id`. Rebuilt Supervisor мовчки відновлював стару розмову.
+  Додано `_clear_checkpointer_state(thread_id)`: спершу пробує
+  документований `delete_thread` API, fallback — ручна зачистка
+  InMemorySaver `storage` / `writes` / `blobs`. `get_or_create_supervisor(
+  ..., fresh=True)` тепер маршрутизується через `reset_thread()`.
+
+### Додано
+
+- +4 тести:
+  - `test_env_file_is_anchored_at_project_root` — перевіряє
+    абсолютність і коректне batko шляху `env_file`.
+  - `test_reset_thread_clears_checkpointer_state` — підтверджує виклик
+    `delete_thread`.
+  - `test_reset_thread_fallback_clears_in_memory_storage` — перевіряє
+    fallback-шлях без `delete_thread`.
+  - `test_fresh_flag_clears_checkpointer_state` — гарантує, що
+    `fresh=True` теж чистить saver.
+
 ## [1.1.0] - 2026-04-07
 
 ### Виправлено

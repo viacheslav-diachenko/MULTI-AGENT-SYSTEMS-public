@@ -4,6 +4,21 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.3.3] - 2026-04-07
+
+### Виправлено
+
+- **[P1] `.env` lookup залежав від cwd** — додано
+  `PROJECT_ROOT = Path(__file__).resolve().parent`, `env_file` у
+  `Settings.model_config` тепер абсолютний (`PROJECT_ROOT / ".env"`),
+  а `data_dir / index_dir / output_dir` нормалізуються через
+  `model_validator` (дзеркало hw9 1.1.0/1.1.1).
+- **[P2] `reset_thread()` / `fresh=True` не чистили checkpointer** —
+  додано `_clear_checkpointer_state(thread_id)` із `delete_thread`
+  first-try і fallback на InMemorySaver internal storage.
+  `get_or_create_supervisor(..., fresh=True)` тепер теж маршрутизовано
+  через `reset_thread()`.
+
 ## [1.3.2] - 2026-04-07
 
 ### Виправлено

@@ -72,7 +72,15 @@ class Settings(BaseSettings):
     acp_host: str = "127.0.0.1"
     acp_port: int = 8903
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # Anchor the .env lookup to PROJECT_ROOT as well — otherwise Pydantic
+    # resolves the filename against the process cwd, which re-introduces
+    # the exact cwd-dependence that path normalisation was supposed to
+    # fix (endpoints, API base, ports would silently fall back to defaults
+    # when the server was launched from another directory).
+    model_config = {
+        "env_file": str(PROJECT_ROOT / ".env"),
+        "env_file_encoding": "utf-8",
+    }
 
     @model_validator(mode="after")
     def _normalise_paths(self) -> "Settings":

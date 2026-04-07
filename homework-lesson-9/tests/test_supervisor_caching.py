@@ -75,3 +75,60 @@ def test_cache_uses_shared_checkpointer(counting_builder):
     checkpointers = {cp for _, cp in counting_builder}
     # All cached supervisors must share the module-level checkpointer.
     assert checkpointers == {supervisor._checkpointer}
+
+
+def test_reset_thread_clears_checkpointer_state(counting_builder, monkeypatch):
+    """reset_thread must evict saved LangGraph checkpoints, not just the
+    cached Python instance — otherwise a rebuilt Supervisor with the
+    same thread_id would silently recover the old conversation."""
+    deleted: list[str] = []
+
+    def _fake_delete(thread_id: str) -> None:
+        deleted.append(thread_id)
+
+    # Use the documented delete_thread API if the installed langgraph
+    # exposes it; otherwise monkey-patch one on so the fallback path is
+    # only taken when really necessary.
+    monkeypatch.setattr(supervisor._checkpointer, "delete_thread", _fake_delete, raising=False)
+
+    supervisor.get_or_create_supervisor("thread-a")
+    supervisor.reset_thread("thread-a")
+
+    assert deleted == ["thread-a"]
+    assert "thread-a" not in supervisor._supervisors
+
+
+def test_reset_thread_fallback_clears_in_memory_storage(counting_builder, monkeypatch):
+    """When delete_thread is unavailable the helper must still wipe any
+    InMemorySaver-style internal dict keyed by (thread_id, ...)."""
+    fake_storage: dict = {
+        ("thread-a", "", "ckpt-1"): {"data": "stale"},
+        ("thread-a", "", "ckpt-2"): {"data": "stale"},
+        ("thread-b", "", "ckpt-1"): {"data": "keep"},
+    }
+    # Strip delete_thread so the fallback branch runs.
+    monkeypatch.delattr(supervisor._checkpointer, "delete_thread", raising=False)
+    monkeypatch.setattr(supervisor._checkpointer, "storage", fake_storage, raising=False)
+
+    supervisor.get_or_create_supervisor("thread-a")
+    supervisor.reset_thread("thread-a")
+
+    assert ("thread-a", "", "ckpt-1") not in fake_storage
+    assert ("thread-a", "", "ckpt-2") not in fake_storage
+    assert ("thread-b", "", "ckpt-1") in fake_storage
+
+
+def test_fresh_flag_clears_checkpointer_state(counting_builder, monkeypatch):
+    """fresh=True must fully reset the thread, not only pop the cache."""
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        supervisor._checkpointer, "delete_thread",
+        lambda tid: deleted.append(tid),
+        raising=False,
+    )
+
+    supervisor.get_or_create_supervisor("thread-a")
+    supervisor.get_or_create_supervisor("thread-a", fresh=True)
+
+    assert deleted == ["thread-a"]
+    assert len(counting_builder) == 2
