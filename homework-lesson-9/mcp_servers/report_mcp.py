@@ -50,9 +50,14 @@ def save_report(filename: str, content: str) -> str:
             fh.write(content)
     except OSError as e:
         logger.error("save_report failed for path=%r: %s", filepath, e)
-        return f"Failed to save report: {e}"
+        # Fail loud: let FastMCP surface the error as a protocol error so
+        # the Supervisor wrapper propagates it to LangGraph as a tool
+        # failure instead of a success-shaped string the REPL truncates.
+        raise RuntimeError(f"Failed to save report to {filepath}: {e}") from e
 
-    return f"Report saved successfully: {os.path.abspath(filepath)}"
+    abs_path = os.path.abspath(filepath)
+    logger.info("Report saved: %s", abs_path)
+    return f"Report saved successfully: {abs_path}"
 
 
 @mcp.resource("resource://output-dir")

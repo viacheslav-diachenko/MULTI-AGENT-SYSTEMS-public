@@ -15,7 +15,12 @@ import uuid
 from langgraph.types import Command, Interrupt
 
 from config import Settings
-from supervisor import build_supervisor, reset_revision_counter
+from health import format_results, run_health_checks
+from supervisor import (
+    get_or_create_supervisor,
+    reset_revision_counter,
+    reset_thread,
+)
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -184,8 +189,12 @@ def process_stream_step(step: dict) -> None:
                     print(f"\n  [Supervisor -> {tool_call['name']}] {args_preview}")
 
             elif hasattr(msg, "name") and getattr(msg, "type", "") == "tool":
-                content_len = len(str(msg.content))
-                print(f"  <- [{msg.name}] {content_len} chars")
+                content_str = str(msg.content)
+                preview = content_str[:300].replace("\n", " ")
+                suffix = "..." if len(content_str) > 300 else ""
+                status = getattr(msg, "status", None)
+                status_tag = f" [{status}]" if status and status != "success" else ""
+                print(f"  <- [{msg.name}]{status_tag} ({len(content_str)} chars) {preview}{suffix}")
 
             elif hasattr(msg, "content") and msg.content:
                 msg_type = getattr(msg, "type", "")
@@ -200,9 +209,24 @@ def main() -> None:
     print("  Multi-Agent Research System (hw9: MCP + ACP)")
     print("  Supervisor → ACP → (Planner | Researcher | Critic) → MCP")
     print("  Commands: 'exit'/'quit' to leave, 'new' to start a fresh conversation.")
-    print(f"  ACP base: {settings.acp_base_url}")
-    print(f"  SearchMCP: {settings.search_mcp_url}")
-    print(f"  ReportMCP: {settings.report_mcp_url}")
+    print("=" * 60)
+
+    print("  Checking endpoints...")
+    try:
+        results = run_health_checks(settings)
+    except Exception as exc:  # pragma: no cover — defensive
+        print(f"  Health checks errored: {exc}")
+        results = []
+    if results:
+        print(format_results(results))
+        if any(not r.ok for r in results):
+            print(
+                "\n  ⚠  One or more endpoints are unreachable. Start the "
+                "required servers before sending queries.\n"
+                "     1) python mcp_servers/search_mcp.py\n"
+                "     2) python mcp_servers/report_mcp.py\n"
+                "     3) python acp_server.py"
+            )
     print("=" * 60)
 
     thread_id = uuid.uuid4().hex
@@ -224,6 +248,7 @@ def main() -> None:
             print("Goodbye!")
             break
         if user_input.lower() == "new":
+            reset_thread(thread_id)
             thread_id = uuid.uuid4().hex
             _current_config["configurable"]["thread_id"] = thread_id
             _current_supervisor = None
@@ -231,8 +256,11 @@ def main() -> None:
             continue
 
         logger.info("User query: %s", user_input)
+        # Reset the per-turn research revision budget, but keep the
+        # cached Supervisor + shared checkpointer so LangGraph sees
+        # prior conversation state.
         reset_revision_counter(thread_id)
-        _current_supervisor = build_supervisor()
+        _current_supervisor = get_or_create_supervisor(thread_id)
 
         try:
             for step in _current_supervisor.stream(

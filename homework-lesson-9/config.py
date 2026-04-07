@@ -6,10 +6,25 @@ call — long-running ACP sessions never see a stale clock.
 """
 
 from datetime import datetime
+from pathlib import Path
 
 from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings
+
+# Anchor relative paths to the hw9 project root (the directory containing
+# this file). Without this, DATA_DIR/INDEX_DIR/OUTPUT_DIR would resolve
+# against whatever CWD the process happens to be launched from, which is
+# fragile for tmux/pm2/service wrappers.
+PROJECT_ROOT: Path = Path(__file__).resolve().parent
+
+
+def _resolve_path(value: str) -> str:
+    """Return ``value`` as an absolute path anchored to PROJECT_ROOT."""
+    path = Path(value)
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    return str(path)
 
 
 class Settings(BaseSettings):
@@ -58,6 +73,19 @@ class Settings(BaseSettings):
     acp_port: int = 8903
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    @model_validator(mode="after")
+    def _normalise_paths(self) -> "Settings":
+        """Rewrite filesystem paths to absolute values anchored at PROJECT_ROOT.
+
+        Runs once at Settings() construction, so every downstream consumer
+        (retriever, ingest, MCP servers) sees stable absolute paths
+        regardless of the launching process cwd.
+        """
+        for attr in ("data_dir", "index_dir", "output_dir"):
+            value = getattr(self, attr)
+            object.__setattr__(self, attr, _resolve_path(value))
+        return self
 
     @property
     def search_mcp_url(self) -> str:

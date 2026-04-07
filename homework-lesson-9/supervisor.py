@@ -37,6 +37,13 @@ settings = Settings()
 
 _revision_counts: dict[str, int] = {}
 
+# Shared checkpointer + per-thread Supervisor cache so multi-turn REPL
+# conversations preserve LangGraph state across turns. Previously
+# build_supervisor() minted a new InMemorySaver on every user input,
+# silently erasing conversation history and checkpoints.
+_checkpointer = InMemorySaver()
+_supervisors: dict[str, Any] = {}
+
 
 def reset_revision_counter(thread_id: str) -> None:
     _revision_counts[thread_id] = 0
@@ -167,8 +174,8 @@ def save_report(filename: str, content: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_supervisor():
-    """Create a fresh Supervisor agent with a dynamic prompt and HITL gate."""
+def _build_supervisor_instance(checkpointer):
+    """Build a Supervisor agent bound to a specific checkpointer."""
     return create_agent(
         create_llm(settings),
         tools=[
@@ -181,5 +188,37 @@ def build_supervisor():
         middleware=[
             HumanInTheLoopMiddleware(interrupt_on={"save_report": True}),
         ],
-        checkpointer=InMemorySaver(),
+        checkpointer=checkpointer,
     )
+
+
+def build_supervisor():
+    """Create a one-shot Supervisor with its own private InMemorySaver.
+
+    Kept for ad-hoc tooling and tests. The REPL should use
+    :func:`get_or_create_supervisor` so conversation state survives
+    across turns.
+    """
+    return _build_supervisor_instance(InMemorySaver())
+
+
+def get_or_create_supervisor(thread_id: str, *, fresh: bool = False):
+    """Return a Supervisor bound to the shared module-level checkpointer.
+
+    The first call for a given ``thread_id`` builds a fresh agent;
+    subsequent calls return the cached instance so LangGraph checkpoints
+    and conversation history persist across REPL turns. Pass
+    ``fresh=True`` (or call :func:`reset_thread`) to discard the cache
+    when the user explicitly starts a new conversation.
+    """
+    if fresh:
+        _supervisors.pop(thread_id, None)
+    if thread_id not in _supervisors:
+        _supervisors[thread_id] = _build_supervisor_instance(_checkpointer)
+    return _supervisors[thread_id]
+
+
+def reset_thread(thread_id: str) -> None:
+    """Drop the cached Supervisor and revision counter for a thread."""
+    _supervisors.pop(thread_id, None)
+    _revision_counts.pop(thread_id, None)

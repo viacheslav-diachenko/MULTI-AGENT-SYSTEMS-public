@@ -4,6 +4,53 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.1.0] - 2026-04-07
+
+### Виправлено
+
+- **[P1] Втрачений multi-turn state** — `build_supervisor()` на кожен
+  user turn створював новий `InMemorySaver`, тому LangGraph checkpoints
+  і історія розмови безшумно обнулялись між запитами. Додано
+  module-level `_checkpointer` та `_supervisors: dict[str, Agent]`,
+  а також `get_or_create_supervisor(thread_id)` / `reset_thread()`.
+  `main.py` тепер викликає `get_or_create_supervisor` на кожен турн,
+  а команда `new` викликає `reset_thread` перед створенням нового
+  `thread_id`. Per-turn reset revision counter збережено.
+- **[P1] `save_report` глушила помилки** — ReportMCP повертав string
+  `"Failed to save report: ..."` і на успіх, і на помилку, а REPL
+  друкував лише довжину контенту. Тепер ReportMCP піднімає
+  `RuntimeError` на `OSError`, а `process_stream_step` показує preview
+  tool-відповіді (300 символів) + tool status tag, тож і успіх, і fail
+  реально видно користувачу.
+- **[P2] Шляхи залежали від cwd процесу** — `DATA_DIR`/`INDEX_DIR`/
+  `OUTPUT_DIR` нормалізуються через `pathlib.Path` відносно нового
+  `PROJECT_ROOT = Path(__file__).resolve().parent` у `model_validator`
+  `Settings`. Запуск з будь-якого cwd (tmux/pm2/service) тепер
+  детерміновано читає/пише у правильні директорії.
+- **[P2] `mcp_tools_to_langchain` мовчки коерсив невідомі типи до
+  `str`** — додано `UnsupportedMCPSchemaError` і fail-fast перевірку
+  на `array`/`object`/невідомі типи. Nullable-union `[primitive, null]`
+  коректно колапсує у `Optional[primitive]`.
+
+### Додано
+
+- `health.py` — async ping SearchMCP / ReportMCP / ACP через FastMCP та
+  acp-sdk клієнти. `main.py` виконує health checks на старті REPL і
+  виводить summary + команди для запуску серверів, якщо щось недоступне.
+- Тести (+13):
+  - `tests/test_config_paths.py` — 4 тести path normalisation,
+    включно з "запуск з іншого cwd".
+  - `tests/test_supervisor_caching.py` — 5 тестів на instance reuse,
+    fresh rebuild, `reset_thread` eviction, shared checkpointer.
+  - `tests/test_mcp_utils.py` — 3 тести fail-fast для array/object
+    params та collapse union `[integer, null]` → `Optional[int]`.
+  - `tests/test_supervisor_delegation.py` — 1 тест для
+    `save_report → ReportMCP` error propagation.
+
+### Змінено
+
+- Version bump 1.0.0 → 1.1.0.
+
 ## [1.0.0] - 2026-04-07
 
 ### Додано

@@ -83,3 +83,55 @@ def test_handles_tool_without_schema():
     assert lc_tool.name == "ping"
     # description falls back to tool name when original is empty
     assert lc_tool.description in ("", "ping")
+
+
+def test_rejects_array_parameter():
+    """Array-typed params must fail fast instead of silently becoming str."""
+    from mcp_utils import UnsupportedMCPSchemaError
+
+    tool = FakeTool(
+        name="bulk_search",
+        description="",
+        inputSchema={
+            "type": "object",
+            "properties": {"queries": {"type": "array"}},
+            "required": ["queries"],
+        },
+    )
+    with pytest.raises(UnsupportedMCPSchemaError, match="bulk_search"):
+        mcp_tools_to_langchain([tool], FakeClient())
+
+
+def test_rejects_object_parameter():
+    from mcp_utils import UnsupportedMCPSchemaError
+
+    tool = FakeTool(
+        name="save_entity",
+        description="",
+        inputSchema={
+            "type": "object",
+            "properties": {"entity": {"type": "object"}},
+            "required": ["entity"],
+        },
+    )
+    with pytest.raises(UnsupportedMCPSchemaError):
+        mcp_tools_to_langchain([tool], FakeClient())
+
+
+def test_accepts_nullable_primitive_union():
+    """['integer','null'] should collapse to Optional[int]."""
+    tool = FakeTool(
+        name="paged_search",
+        description="",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "page": {"type": ["integer", "null"]},
+            },
+            "required": ["query"],
+        },
+    )
+    [lc_tool] = mcp_tools_to_langchain([tool], FakeClient())
+    assert lc_tool.name == "paged_search"
+    assert lc_tool.args_schema is not None

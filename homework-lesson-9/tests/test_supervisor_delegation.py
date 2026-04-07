@@ -106,3 +106,18 @@ def test_save_report_tool_calls_report_mcp(fake_report_mcp):
     })
     assert "saved:report.md" in out
     assert fake_report_mcp == [("report.md", "# hello")]
+
+
+def test_save_report_propagates_errors(monkeypatch):
+    """ReportMCP failures must surface as a real exception, not a happy string."""
+
+    async def _boom(filename: str, content: str) -> str:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(supervisor, "_mcp_save_report", _boom)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        supervisor.save_report.invoke({
+            "filename": "report.md",
+            "content": "# hello",
+        })
