@@ -1,0 +1,25 @@
+# Multi-agent stack (inherited from hw8)
+langgraph==1.1.4
+langchain==1.2.14
+langchain-core==1.2.20
+langchain-openai==1.1.11
+langchain-community==0.4.1
+pydantic==2.12.5
+pydantic-settings==2.13.1
+
+# Protocols (new in hw9)
+fastmcp==3.2.0
+acp-sdk==1.0.3
+uvicorn==0.35.0
+
+# Tools and retrieval
+faiss-cpu==1.13.2
+rank_bm25==0.2.2
+ddgs==9.11.4
+trafilatura==2.0.0
+pypdf==6.9.1
+httpx==0.28.1
+
+# Tests
+pytest==8.4.2
+pytest-asyncio==0.24.0
