@@ -4,6 +4,16 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.3.4] - 2026-04-07
+
+### Виправлено
+
+- **[P2] Fallback cleanup не чистив `InMemorySaver.storage`** — той
+  самий баг, що й у hw9 1.1.2: `storage` у langgraph 1.1.x —
+  `dict[str, ...]` з ключем по `thread_id`, а не tuple-keyed. Тепер
+  `storage.pop(thread_id, None)`, а tuple-фільтрація працює лише для
+  `writes`/`blobs`. Дзеркало hw9 фіксу.
+
 ## [1.3.3] - 2026-04-07
 
 ### Виправлено

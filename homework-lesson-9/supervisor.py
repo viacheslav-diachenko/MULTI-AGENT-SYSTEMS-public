@@ -225,7 +225,20 @@ def _clear_checkpointer_state(thread_id: str) -> None:
                 exc_info=True,
             )
 
-    for attr_name in ("storage", "writes", "blobs"):
+    # InMemorySaver layout (langgraph 1.1.x):
+    #   storage: defaultdict[str, dict[str, dict[str, tuple]]]
+    #            — keyed by thread_id at the top level.
+    #   writes:  defaultdict[tuple[str, str, str, str], list]
+    #   blobs:   defaultdict[tuple[str, str, str, str], ...]
+    #            — keyed by (thread_id, checkpoint_ns, ...) tuples.
+    # Tuple-based filtering works for writes/blobs but would miss every
+    # single entry in ``storage``, which is exactly where the main
+    # checkpoint history lives.
+    storage = getattr(_checkpointer, "storage", None)
+    if isinstance(storage, dict):
+        storage.pop(thread_id, None)
+
+    for attr_name in ("writes", "blobs"):
         store = getattr(_checkpointer, attr_name, None)
         if not isinstance(store, dict):
             continue

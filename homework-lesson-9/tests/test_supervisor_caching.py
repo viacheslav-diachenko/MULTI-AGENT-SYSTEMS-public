@@ -99,23 +99,44 @@ def test_reset_thread_clears_checkpointer_state(counting_builder, monkeypatch):
 
 
 def test_reset_thread_fallback_clears_in_memory_storage(counting_builder, monkeypatch):
-    """When delete_thread is unavailable the helper must still wipe any
-    InMemorySaver-style internal dict keyed by (thread_id, ...)."""
+    """When delete_thread is unavailable the helper must still wipe the
+    real ``InMemorySaver`` layout: ``storage`` keyed by ``thread_id``
+    strings, ``writes`` / ``blobs`` keyed by ``(thread_id, ...)`` tuples.
+    """
+    # Real shape per langgraph.checkpoint.memory.InMemorySaver docs.
     fake_storage: dict = {
-        ("thread-a", "", "ckpt-1"): {"data": "stale"},
-        ("thread-a", "", "ckpt-2"): {"data": "stale"},
-        ("thread-b", "", "ckpt-1"): {"data": "keep"},
+        "thread-a": {"": {"ckpt-1": ("stale",), "ckpt-2": ("stale",)}},
+        "thread-b": {"": {"ckpt-1": ("keep",)}},
     }
-    # Strip delete_thread so the fallback branch runs.
+    fake_writes: dict = {
+        ("thread-a", "", "ckpt-1", "task-1"): [("w", "stale")],
+        ("thread-a", "", "ckpt-2", "task-1"): [("w", "stale")],
+        ("thread-b", "", "ckpt-1", "task-1"): [("w", "keep")],
+    }
+    fake_blobs: dict = {
+        ("thread-a", "", "channel", "v1"): b"stale",
+        ("thread-b", "", "channel", "v1"): b"keep",
+    }
+
     monkeypatch.delattr(supervisor._checkpointer, "delete_thread", raising=False)
     monkeypatch.setattr(supervisor._checkpointer, "storage", fake_storage, raising=False)
+    monkeypatch.setattr(supervisor._checkpointer, "writes", fake_writes, raising=False)
+    monkeypatch.setattr(supervisor._checkpointer, "blobs", fake_blobs, raising=False)
 
     supervisor.get_or_create_supervisor("thread-a")
     supervisor.reset_thread("thread-a")
 
-    assert ("thread-a", "", "ckpt-1") not in fake_storage
-    assert ("thread-a", "", "ckpt-2") not in fake_storage
-    assert ("thread-b", "", "ckpt-1") in fake_storage
+    # storage: the whole thread_id bucket must be gone.
+    assert "thread-a" not in fake_storage
+    assert "thread-b" in fake_storage
+
+    # writes: tuple-keys starting with thread-a are gone; thread-b kept.
+    assert all(key[0] != "thread-a" for key in fake_writes)
+    assert ("thread-b", "", "ckpt-1", "task-1") in fake_writes
+
+    # blobs: same filter by first tuple element.
+    assert all(key[0] != "thread-a" for key in fake_blobs)
+    assert ("thread-b", "", "channel", "v1") in fake_blobs
 
 
 def test_fresh_flag_clears_checkpointer_state(counting_builder, monkeypatch):

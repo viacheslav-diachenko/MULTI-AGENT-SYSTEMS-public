@@ -4,6 +4,26 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.1.2] - 2026-04-07
+
+### Виправлено
+
+- **[P2] Fallback cleanup пропускав реальний `InMemorySaver.storage`** —
+  `_clear_checkpointer_state` обробляв `storage` як tuple-keyed словник,
+  тоді як langgraph 1.1.x документує його як `dict[str, ...]` з
+  `thread_id` на верхньому рівні. Якщо `delete_thread` недоступний або
+  впаде, основна історія checkpoint-ів залишалась, і rebuilt Supervisor
+  міг відновити стару розмову. Тепер `storage.pop(thread_id, None)`,
+  а tuple-фільтрація залишена лише для `writes`/`blobs` (які реально
+  key-овані `(thread_id, ns, checkpoint_id, task_id)`).
+- **[P3] Fallback-тест моделював неправильну форму storage** —
+  `test_reset_thread_fallback_clears_in_memory_storage` переписано:
+  `storage` тепер `{"thread-a": {...}, "thread-b": {...}}`, а
+  `writes`/`blobs` — tuple-keyed. Тест валідує, що після `reset_thread`
+  bucket `thread-a` зникає зі storage цілком, а всі tuple-записи з
+  `thread-a` на позиції 0 — з writes/blobs; bucket `thread-b`
+  залишається неторканим.
+
 ## [1.1.1] - 2026-04-07
 
 ### Виправлено

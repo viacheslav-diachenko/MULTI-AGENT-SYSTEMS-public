@@ -226,7 +226,14 @@ def _clear_checkpointer_state(thread_id: str) -> None:
                 exc_info=True,
             )
 
-    for attr_name in ("storage", "writes", "blobs"):
+    # InMemorySaver.storage is keyed by thread_id strings at the top
+    # level; writes/blobs are keyed by (thread_id, ...) tuples. Treating
+    # them uniformly would silently leak the main checkpoint history.
+    storage = getattr(_checkpointer, "storage", None)
+    if isinstance(storage, dict):
+        storage.pop(thread_id, None)
+
+    for attr_name in ("writes", "blobs"):
         store = getattr(_checkpointer, attr_name, None)
         if not isinstance(store, dict):
             continue
