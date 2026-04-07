@@ -23,6 +23,17 @@
   bucket `thread-a` зникає зі storage цілком, а всі tuple-записи з
   `thread-a` на позиції 0 — з writes/blobs; bucket `thread-b`
   залишається неторканим.
+- **[P3] Fallback-тест міг зовсім не брати fallback-гілку** —
+  `monkeypatch.delattr(..., raising=False)` був no-op для
+  class-level `InMemorySaver.delete_thread`, тому тест міг мовчки
+  проходити через happy-path. Тепер `delete_thread` перекривається
+  на інстансі raising-stub-ом, який форсить `_clear_checkpointer_state`
+  в manual cleanup-гілку детерміновано.
+
+### Документація
+
+- README: додано секцію «Що покращено в 1.1.2», щоб узгодити з версією
+  у заголовку (раніше показувалось лише 1.1.1).
 
 ## [1.1.1] - 2026-04-07
 
