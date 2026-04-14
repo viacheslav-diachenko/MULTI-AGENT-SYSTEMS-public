@@ -1,181 +1,200 @@
 # Changelog — homework-lesson-10
 
-## 1.0.2 — 2026-04-14 — Follow-up review fixes
+## 1.0.2 — 2026-04-14 — Виправлення з follow-up рев'ю
 
-Addresses two remaining issues from the follow-up review (the third —
-missing canonical fixtures / baseline scores — still requires live hw8
-infrastructure and is left as user action).
+Закриває два питання з другого раунду рев'ю. Третє (відсутність canonical
+fixtures + baseline-scores) залишається у користувача — вимагає live hw8
+інфраструктури.
 
-### Staleness guard no longer blocks fixture-free optional suites
+### Staleness guard більше не блокує fixture-free optional suites
 
-`_staleness_guard` was session-scoped autouse, so a missing `_manifest.json`
-skipped the entire session — including `pytest tests/smoke/ -m live` and
-`pytest tests/enhancements/test_judge_bias.py -m enhancement`, which do not
-need recorded fixtures.
+`_staleness_guard` був session-scoped autouse, тож відсутній `_manifest.json`
+скіпав усю сесію — включно з `pytest tests/smoke/ -m live` та
+`pytest tests/enhancements/test_judge_bias.py -m enhancement`, яким записані
+fixtures не потрібні.
 
-Fix in `conftest.py`:
-- Guard is now function-scoped autouse; it inspects `request.node.fspath`
-  and skips validation for paths in `_FIXTURE_FREE_PATHS`
+Виправлення в `conftest.py`:
+- Guard став function-scoped autouse; перевіряє `request.node.fspath` і
+  пропускає валідацію для шляхів у `_FIXTURE_FREE_PATHS`
   (`tests/smoke/`, `tests/enhancements/test_judge_bias.py`).
-- Manifest validation itself is memoized at session level (`_MANIFEST_STATE`)
-  — only the first gated test pays the git/hash cost; later tests reuse the
-  cached verdict.
+- Сама валідація manifest-а memoize-ється на сесію (`_MANIFEST_STATE`) —
+  лише перший gated-тест платить ціну git/hash; наступні переuse-ять
+  кешований вердикт.
 
-### Tool calls now agent-tagged at recording time
+### Tool-calls тепер тегуються агентом під час запису
 
-`record_fixtures.py` used to collect tool calls into one flat list; per-agent
-splits were inferred from substrings in the tool name (`"planner" in n`).
-Because Planner and Researcher both can call overlapping tools like
-`web_search` / `knowledge_search`, the test suite could only prove those
-tools were used *somewhere* in the happy-path run, not that the right agent
-used them.
+`record_fixtures.py` раніше клав tool-calls у плаский список, а
+per-agent розкладка робилась через підстрічний збіг імен (`"planner" in n`).
+Оскільки Planner і Researcher можуть викликати ті самі `web_search` /
+`knowledge_search`, тести могли довести лише «ці tools викликались десь у
+trace happy_path», а не «правильний агент їх викликав».
 
-Fix in `scripts/record_fixtures.py`:
-- The `_Capture` callback now hooks `on_chain_start` in addition to
-  `on_tool_start` and tracks `parent_of: run_id → parent_run_id`.
-- When a supervisor delegation tool (`delegate_to_planner`,
-  `delegate_to_researcher`, `delegate_to_critic`) starts, its `run_id` is
-  tagged with the sub-agent name in `agent_tag_of`.
-- Every captured tool call carries a new `"agent"` field: we walk the
-  `parent_of` chain until we hit a delegation tag, else default to
-  `"supervisor"` (save_report, the delegations themselves).
-- `_write_per_agent` now filters by `tc.get("agent") == role` instead of
-  substring matching — no more Planner/Researcher overlap.
+Виправлення в `scripts/record_fixtures.py`:
+- `_Capture` callback тепер слухає `on_chain_start` додатково до
+  `on_tool_start` і будує мапу `parent_of: run_id → parent_run_id`.
+- Коли стартує supervisor-делегаційний tool (`delegate_to_planner`,
+  `delegate_to_researcher`, `delegate_to_critic`), його `run_id`
+  тегується іменем суб-агента у `agent_tag_of`.
+- Кожен захоплений tool_call отримує нове поле `"agent"`: walk-up по
+  `parent_of` до найближчого делегаційного тегу, fallback — `"supervisor"`
+  (для `save_report` і самих делегацій).
+- `_write_per_agent` тепер фільтрує по `tc.get("agent") == role` замість
+  підстрічного матчу — Planner-овий і Researcher-овий `web_search`
+  розрізняються.
 
-### tests/test_tools.py now consumes the agent field
+### tests/test_tools.py тепер споживає поле agent
 
-Rewrote the three README-mandated tool-correctness tests to assert per-agent
-slices of the tool-call trace:
+Переписав три README-обов'язкові tool-correctness тести під per-agent
+зрізи trace-у:
 
-- `test_planner_uses_search_tools` filters `tool_calls` by
-  `tc["agent"] == "planner"`, then checks intersection with `SEARCH_TOOLS`.
-- `test_researcher_uses_research_tools` filters by `"researcher"` against
+- `test_planner_uses_search_tools` фільтрує `tool_calls` через
+  `tc["agent"] == "planner"`, перетинає з `SEARCH_TOOLS`.
+- `test_researcher_uses_research_tools` — те саме з `"researcher"` проти
   `RESEARCH_TOOLS`.
-- `test_supervisor_saves_report_on_approve` filters by `"supervisor"` and
-  requires `save_report` to appear at that scope specifically — no more
-  accidental pass when a nested agent happened to call save_report.
+- `test_supervisor_saves_report_on_approve` — фільтрує по `"supervisor"` і
+  вимагає `save_report` саме на цьому scope; випадковий виклик
+  save_report з вкладеного агента більше не пройде як success.
 
-All three now fail with informative messages that show both the
-agent-scoped calls and the full trace, so a failure immediately points to
-whether the problem is the agent pipeline or the callback attribution.
+Усі три тепер `pytest.fail` з інформативними повідомленнями, що показують
+і agent-scoped виклики, і повний trace — fail відразу скеровує діагноз
+(чи це проблема pipeline агента, чи callback-attribution).
 
-Shared helper `_assert_agent_tool_correctness(record, agent, allowed)`
-factors out the common pattern: filter → intersect → require non-empty →
-measure `ToolCorrectnessMetric`.
+Спільний хелпер `_assert_agent_tool_correctness(record, agent, allowed)`
+факторизує паттерн: filter → intersect → require non-empty → measure
+`ToolCorrectnessMetric`.
 
-### Known outstanding (user action)
+### Лишається відкритим (потребує live hw8 інфри)
 
-- Canonical fixtures still absent (`fixtures/hw8/` empty). Needs live hw8
-  supervisor + tool servers. User action: `python scripts/record_fixtures.py`.
-- Baseline scores still TBD until the first `deepeval test run tests/`.
+- Канонічні fixtures ще відсутні (`fixtures/hw8/` порожня). Потрібен
+  живий hw8 supervisor + tool-сервери. User action:
+  `python scripts/record_fixtures.py`.
+- Baseline scores TBD до першого `deepeval test run tests/`.
 
 ---
 
-## 1.0.1 — 2026-04-14 — Review fixes (collection hardening, stricter gates)
+## 1.0.1 — 2026-04-14 — Виправлення рев'ю (collection hardening, суворіші gates)
 
-Applied fixes surfaced by code review of the initial scaffold. All four
-agreed-on issues addressed:
+Застосовано виправлення з рев'ю початкового scaffold-у. Усі чотири
+погоджені пункти закриті:
 
-### Collection no longer crashes without fixtures
+### Collection більше не падає при відсутніх fixtures
 
-`conftest.load_agent_fixtures()` used to raise `RuntimeError` when fixtures
-were missing — but it is called inside `@pytest.mark.parametrize(...)`, which
-evaluates at *collection* time, before the session-scoped staleness guard
-gets a chance to `pytest.skip`. Result: user saw an ugly traceback instead
-of the friendly "run scripts/record_fixtures.py" message.
+`conftest.load_agent_fixtures()` раніше викидав `RuntimeError`, коли
+fixtures відсутні — але викликається він у `@pytest.mark.parametrize(...)`,
+який оцінюється під час *collection*, до того як session-scoped staleness
+guard встигає `pytest.skip`. Результат: користувач бачив трасу замість
+дружнього повідомлення «запусти scripts/record_fixtures.py».
 
-Fix:
-- `load_agent_fixtures()` returns a single stub record
-  `{"_missing_fixtures": True, ...}` when the fixture file is absent.
-- New helper `conftest.skip_if_stub(record)` — called as the first line of
-  every parametrized test. Turns the stub into a clean `pytest.skip` with
-  a recovery command.
-- Session-scoped staleness guard still fires when manifest itself is
-  missing → whole-session skip with the same recovery message.
+Виправлення:
+- `load_agent_fixtures()` повертає stub-запис
+  `{"_missing_fixtures": True, ...}` коли fixture-файлу нема.
+- Новий хелпер `conftest.skip_if_stub(record)` — викликається першим
+  рядком кожного parametrized тесту. Перетворює stub на чистий
+  `pytest.skip` з recovery-командою.
+- Session-scoped staleness guard все одно спрацьовує, коли сам manifest
+  відсутній → whole-session skip з тим самим recovery.
 
-### Freshness contract now covers all manifest hashes
+### Freshness contract тепер покриває всі manifest-хеші
 
-`_manifest.json` writes four hashes; the guard only verified two. Added:
-- `_model_endpoint_hash()` — detects `api_base` / `model_name` /
-  `temperature` changes.
-- `_corpus_hash()` — detects FAISS index changes (file-by-file).
+`_manifest.json` пише чотири хеші; guard перевіряв тільки два. Додано:
+- `_model_endpoint_hash()` — детектує зміни `api_base` / `model_name` /
+  `temperature`.
+- `_corpus_hash()` — детектує зміни FAISS index (file-by-file).
 
-Both are now verified in `_verify_manifest()` with targeted drift messages.
+Обидва тепер перевіряються в `_verify_manifest()` з точковими повідомленнями
+про drift.
 
-### Optional suites honour documented run commands
+### Optional suites поважають документовані run-команди
 
-`tests/conftest.py::pytest_collection_modifyitems` previously dropped every
-item from `tests/enhancements/` and `tests/smoke/` unconditionally — which
-broke the README-documented commands:
+`tests/conftest.py::pytest_collection_modifyitems` раніше безумовно
+викидав items з `tests/enhancements/` і `tests/smoke/` — це ламало
+README-документовані команди:
 - `pytest tests/enhancements/ -m enhancement`
 - `pytest tests/smoke/ -m live`
 
-Fix: the hook now checks whether the user explicitly targeted those
-directories (via path in `config.args` or `-m enhancement` / `-m live`) and
-keeps matching items when so.
+Виправлення: хук тепер перевіряє, чи користувач явно націлив ці
+директорії (через шлях у `config.args` або `-m enhancement` / `-m live`)
+і зберігає матчингові items.
 
-### Tool correctness tightened
+### Tool correctness став суворішим
 
-- `SEARCH_TOOLS` / `RESEARCH_TOOLS` no longer include supervisor delegation
-  wrappers (`delegate_to_planner`, `delegate_to_researcher`). Delegation is
-  a routing step, not a search. Expected sets are the actual agent tools
-  (`web_search`, `knowledge_search`, `read_url`).
-- `test_supervisor_saves_report_on_approve` previously called `pytest.skip`
-  when `save_report` was absent from the tool-call trace — that silently
-  hid a real README-requirement failure. It now `pytest.fail`s with the
-  README citation.
-- All three tool tests now `pytest.fail` (not `skip`) when the agent never
-  calls any tool from its expected pool — exposing agent-side regressions
-  instead of masking them.
+- `SEARCH_TOOLS` / `RESEARCH_TOOLS` більше не включають supervisor-
+  делегаційні wrapper-и (`delegate_to_planner`, `delegate_to_researcher`).
+  Делегація — це routing, не пошук. Очікувані набори — реальні tools
+  агента (`web_search`, `knowledge_search`, `read_url`).
+- `test_supervisor_saves_report_on_approve` раніше викликав `pytest.skip`,
+  коли `save_report` був відсутній у trace tool-call — це тихо ховало
+  реальну невідповідність README-вимозі. Тепер `pytest.fail` з цитатою
+  README.
+- Усі три tool-тести тепер `pytest.fail` (не `skip`), коли агент не
+  викликав жодного tool зі свого pool — викриває agent-side регресії
+  замість маскувати їх.
 
-### Known outstanding
+### Лишається відкритим
 
-- `fixtures/hw8/` is still empty. Running `deepeval test run tests/` in the
-  current session skips with the recovery message. Recording live fixtures
-  requires running hw8 supervisor + tool servers, which this session cannot
-  spin up. User action: `python scripts/record_fixtures.py`.
+- `fixtures/hw8/` усе ще порожня. `deepeval test run tests/` у поточній
+  сесії скіпається з recovery-повідомленням. Запис live fixtures
+  потребує запущеного hw8 supervisor + tool-серверів, які ця сесія не
+  може підняти. User action: `python scripts/record_fixtures.py`.
 
 ---
 
-## 1.0.0 — 2026-04-14 — Initial evaluation layer
+## 1.0.0 — 2026-04-14 — Початковий evaluation шар
 
-Added automated evaluation layer on top of the existing multi-agent system.
+Додано автоматизований evaluation-шар поверх існуючої мультиагентної
+системи з `homework-lesson-8`.
 
-### README-mandated deliverables
+### README-обов'язкові deliverables
 
-- `tests/golden_dataset.json` — 15 examples (5 happy_path, 5 edge_case, 5 failure_case).
-- `tests/test_planner.py` — Plan Quality GEval + structural check via `ResearchPlan`.
-- `tests/test_researcher.py` — custom Groundedness GEval (strict), with `FaithfulnessMetric` as informational companion.
-- `tests/test_critic.py` — Critique Quality GEval + deterministic verdict↔revision_requests contract check.
-- `tests/test_tools.py` — ToolCorrectnessMetric × 3 cases (Planner / Researcher / Supervisor save_report).
-- `tests/test_e2e.py` — AnswerRelevancy + Correctness GEval + custom Citation Presence; per-category policy with Refusal Quality gate for failure_case.
+- `tests/golden_dataset.json` — 15 прикладів (5 happy_path, 5 edge_case, 5 failure_case).
+- `tests/test_planner.py` — Plan Quality GEval + структурна перевірка через `ResearchPlan`.
+- `tests/test_researcher.py` — custom Groundedness GEval (строгий) + `FaithfulnessMetric` як informational компаньйон.
+- `tests/test_critic.py` — Critique Quality GEval + детермінований verdict↔revision_requests контракт.
+- `tests/test_tools.py` — ToolCorrectnessMetric × 3 кейси (Planner / Researcher / Supervisor save_report).
+- `tests/test_e2e.py` — AnswerRelevancy + Correctness GEval + custom Citation Presence; per-category policy з Refusal Quality gate для failure_case.
 
-### Base
+### База
 
-Pure extension of `homework-lesson-8` per the hw10 brief. `conftest.py`
-mounts `homework-lesson-8/` on `sys.path` so schemas, supervisor and
-retriever import directly. `HW_BASE` env var kept as an escape hatch
-(default `hw8`); using any other value is not canonical.
+Чисте розширення `homework-lesson-8` згідно з brief-ом hw10. `conftest.py`
+монтує `homework-lesson-8/` на `sys.path`, тож schemas, supervisor і
+retriever імпортуються напряму. `HW_BASE` env var лишається як escape-
+hatch (default `hw8`); інші значення не canonical.
 
-### Freshness & isolation discipline
+### Freshness & ізоляція
 
-- Absolute-path anchoring (`PROJECT_ROOT = Path(__file__).resolve().parent`) throughout — same pattern as hw8 CHANGELOG lessons.
-- Fixtures live at `fixtures/hw8/`; `_manifest.json` carries 4 hashes (model endpoint, prompts, corpus, golden dataset), `base_commit`, `base_dirty`, `hw_base`, `generated_at`.
-- `conftest.py` session-scoped staleness guard: manifest presence, hash drift, code-drift (`git diff --stat`), dirty-tree (`git status --porcelain`), 30-day freshness.
-- `scripts/record_fixtures.py` refuses to run if `homework-lesson-8/` runtime paths are dirty (unless `--allow-dirty`).
-- Per-test `thread_id` fixture + `supervisor.reset_thread` cleanup — matches hw8 supervisor discipline.
+- Абсолютні шляхи (`PROJECT_ROOT = Path(__file__).resolve().parent`) скрізь —
+  той самий патерн, що в hw8 CHANGELOG-уроках.
+- Fixtures у `fixtures/hw8/`; `_manifest.json` несе 4 хеші
+  (model endpoint, prompts, corpus, golden dataset), `base_commit`,
+  `base_dirty`, `hw_base`, `generated_at`.
+- `conftest.py` session-scoped staleness guard: наявність manifest-а,
+  hash drift, code-drift (`git diff --stat`), dirty-tree
+  (`git status --porcelain`), 30-day freshness.
+- `scripts/record_fixtures.py` відмовляється запускатися, якщо runtime-
+  шляхи `homework-lesson-8/` dirty (без `--allow-dirty`).
+- Per-test `thread_id` fixture + `supervisor.reset_thread` cleanup —
+  відповідає supervisor-дисципліні hw8.
 
-### Enhancements beyond README (optional, excluded from default suite)
+### Enhancements поза README (опційні, виключені з default suite)
 
-- **LLM-as-a-Jury** — `eval_config.py` exposes `PrimaryJudgeLLM` (Qwen3.5-35B, same target family) and `SecondaryJudgeLLM` (Qwen3-Next-80B-A3B-Instruct, different scale/snapshot). Gating metrics (Correctness, Critique Quality, Groundedness, Refusal Quality) aggregate via `min(primary, secondary)`. Residual Qwen-family bias acknowledged; cross-vendor judge is a follow-up.
-- **`tests/enhancements/test_retriever.py`** — Ragas `LLMContextRecall` as informational retriever diagnostic.
-- **`tests/enhancements/test_judge_bias.py`** — Position Bias Detector per Lesson 10 Exercise 3; writes report to `fixtures/_judge_bias_report.json`.
+- **LLM-as-a-Jury** — `eval_config.py` експонує `PrimaryJudgeLLM`
+  (Qwen3.5-35B, та сама target-family) і `SecondaryJudgeLLM`
+  (Qwen3-Next-80B-A3B-Instruct, інший scale/snapshot). Gating-метрики
+  (Correctness, Critique Quality, Groundedness, Refusal Quality)
+  агрегуються через `min(primary, secondary)`. Залишкова Qwen-family bias
+  визнана; cross-vendor суддя — follow-up.
+- **`tests/enhancements/test_retriever.py`** — Ragas `LLMContextRecall` як
+  informational діагностика retriever-а.
+- **`tests/enhancements/test_judge_bias.py`** — Position Bias Detector
+  згідно з Лекцією 10 Exercise 3; пише звіт у `fixtures/_judge_bias_report.json`.
 - **`tests/smoke/test_live_smoke.py`** — live canary, `@pytest.mark.live`.
-- **Reasoning-before-score + verbosity guard** — `eval_config.wrap_steps()` prepends "Reason step by step…" and appends "Do NOT consider response length." to every custom GEval.
+- **Reasoning-before-score + verbosity guard** — `eval_config.wrap_steps()`
+  додає «Reason step by step…» спереду та «Do NOT consider response length.»
+  ззаду до кожного custom GEval.
 
 ### Baseline scores
 
-To be filled after first `deepeval test run tests/` execution. Placeholder:
+Заповнюються після першого `deepeval test run tests/`. Placeholder:
 
 ```
 tests/test_planner.py         — Plan Quality: TBD
@@ -187,6 +206,7 @@ tests/test_e2e.py             — AnswerRelevancy / Correctness / CitationPresen
 
 ### Follow-up (v1.1.0)
 
-- Extend golden dataset to 50 examples per Lesson 10 recommendation.
-- Add cross-vendor judge (OpenAI gpt-4o-mini or Claude Haiku) once key is available.
-- Wire `deepeval view` dashboard into CI.
+- Розширити golden dataset до 50 прикладів згідно з рекомендацією Лекції 10.
+- Додати cross-vendor суддю (OpenAI gpt-4o-mini або Claude Haiku), коли
+  з'явиться ключ.
+- Підключити `deepeval view` dashboard до CI.
