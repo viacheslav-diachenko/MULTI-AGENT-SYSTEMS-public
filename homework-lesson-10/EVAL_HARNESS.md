@@ -7,10 +7,11 @@
 
 ## База
 
-Згідно з brief-ом hw10 — це чисте розширення `homework-lesson-8`. Код
-hw8 не дублюємо: `conftest.py` монтує `homework-lesson-8/` на `sys.path`,
+Згідно з brief-ом hw10 — розширення `homework-lesson-8`. Усі tracked-файли
+hw8 (крім `tests/`, який замінено hw10-тестами) скопійовано в
+`homework-lesson-10/`. `conftest.py` додає `PROJECT_ROOT` до `sys.path`,
 тож тести роблять `from schemas import ResearchPlan`,
-`from supervisor import get_or_create_supervisor` тощо напряму.
+`from supervisor import get_or_create_supervisor` тощо напряму з hw10.
 
 ## Як запускати
 

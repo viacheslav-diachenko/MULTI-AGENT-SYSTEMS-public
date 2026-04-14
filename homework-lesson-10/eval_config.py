@@ -23,7 +23,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError(
         "eval_config.py must be imported after conftest.py mounts sys.path "
-        f"(HW_BASE={os.environ.get('HW_BASE', 'hw8')})"
+        "(check sys.path includes PROJECT_ROOT and config.py is present)"
     ) from exc
 
 

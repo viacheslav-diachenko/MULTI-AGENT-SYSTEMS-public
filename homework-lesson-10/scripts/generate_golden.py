@@ -17,9 +17,8 @@ import sys
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 REPO_ROOT = PROJECT_ROOT.parent
-HW_BASE = os.environ.get("HW_BASE", "hw8").strip().lower()
-BASE_DIR = REPO_ROOT / f"homework-lesson-{HW_BASE[-1]}"
-sys.path.insert(0, str(BASE_DIR))
+BASE_DIR = PROJECT_ROOT  # hw8 source files live under hw10 directly
+sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def main() -> None:

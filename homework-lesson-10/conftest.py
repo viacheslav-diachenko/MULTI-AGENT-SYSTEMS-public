@@ -1,14 +1,15 @@
 """hw10 evaluation harness — conftest.
 
-Base: homework-lesson-8 per README ("extension of homework-lesson-8").
-Env var HW_BASE is preserved as an escape hatch (accepts 'hw8' | 'hw9') but
-the default and sole canonical mode is hw8. All tests and fixtures target hw8.
+hw10 is a self-contained extension of homework-lesson-8: all hw8 source
+files now live physically under homework-lesson-10/ (per the README
+structure). conftest.py just adds PROJECT_ROOT to sys.path so tests can
+`from schemas import ResearchPlan`, `from supervisor import ...` etc.
 
 Responsibilities of this conftest:
   1) sys.path mount на обрану базу + import-path guard (ISSUE 3 з code review)
   2) autouse fixture thread_id per test + reset_thread() cleanup
-  3) session-scoped staleness guard для fixtures/{HW_BASE}/_manifest.json
-     (ISSUE 1+4 з code review: code-drift, dirty-tree, stale metadata)
+  3) session-scoped staleness guard для fixtures/hw8/_manifest.json
+     (code-drift, dirty-tree, stale metadata)
   4) golden_dataset loader
 """
 from __future__ import annotations
@@ -26,19 +27,11 @@ import pytest
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = PROJECT_ROOT.parent
-HW_BASE = os.environ.get("HW_BASE", "hw8").strip().lower()
+BASE_DIR = PROJECT_ROOT  # hw8 source files live here directly
 
-if HW_BASE not in {"hw8", "hw9"}:
-    raise RuntimeError(f"HW_BASE must be 'hw8' or 'hw9', got: {HW_BASE!r}")
-
-BASE_DIR = REPO_ROOT / f"homework-lesson-{HW_BASE[-1]}"
-
-if not BASE_DIR.is_dir():
-    raise RuntimeError(f"Base directory not found: {BASE_DIR}")
-
-# sys.path mount + import-path guard (ISSUE 3) — перевіряємо, що
-# критичні модулі справді прийшли з BASE_DIR, а не з випадкового site-packages.
-sys.path.insert(0, str(BASE_DIR))
+# sys.path mount + import-path guard — гарантуємо, що config/supervisor
+# приходять з PROJECT_ROOT, а не з випадкового site-packages.
+sys.path.insert(0, str(PROJECT_ROOT))
 
 _CANONICAL_MODULES = ("config", "supervisor")
 for _modname in _CANONICAL_MODULES:
@@ -46,38 +39,30 @@ for _modname in _CANONICAL_MODULES:
         _mod = __import__(_modname)
     except ImportError as exc:  # pragma: no cover — structural failure
         raise RuntimeError(
-            f"Cannot import {_modname!r} from {BASE_DIR}: {exc}"
+            f"Cannot import {_modname!r} from {PROJECT_ROOT}: {exc}"
         ) from exc
     _got = pathlib.Path(_mod.__file__).resolve().parent
-    if _got != BASE_DIR:
+    if _got != PROJECT_ROOT:
         raise RuntimeError(
-            f"Import shadowing: {_modname} loaded from {_got}, expected {BASE_DIR}. "
+            f"Import shadowing: {_modname} loaded from {_got}, expected {PROJECT_ROOT}. "
             "Remove conflicting installed package or reorder sys.path."
         )
 
-FIXTURES_DIR = PROJECT_ROOT / "fixtures" / HW_BASE
+FIXTURES_DIR = PROJECT_ROOT / "fixtures" / "hw8"
 MANIFEST_PATH = FIXTURES_DIR / "_manifest.json"
 
-# Runtime paths per base — ці шляхи підлягають git-diff/dirty-check.
-# Якщо туди щось змінилось — fixtures застаріли.
-_RUNTIME_PATHS = {
-    "hw9": [
-        "homework-lesson-9/config.py",
-        "homework-lesson-9/supervisor.py",
-        "homework-lesson-9/retriever.py",
-        "homework-lesson-9/mcp_utils.py",
-        "homework-lesson-9/health.py",
-        "homework-lesson-9/acp_server.py",
-        "homework-lesson-9/agents",
-        "homework-lesson-9/mcp_servers",
-    ],
-    "hw8": [
-        "homework-lesson-8/config.py",
-        "homework-lesson-8/supervisor.py",
-        "homework-lesson-8/tools.py",
-        "homework-lesson-8/main.py",
-    ],
-}
+# Runtime paths under hw10 itself (since hw8 files live here now).
+# git status / git diff against these detects that fixtures must be re-recorded.
+_RUNTIME_PATHS = [
+    "homework-lesson-10/config.py",
+    "homework-lesson-10/supervisor.py",
+    "homework-lesson-10/retriever.py",
+    "homework-lesson-10/tools.py",
+    "homework-lesson-10/main.py",
+    "homework-lesson-10/schemas.py",
+    "homework-lesson-10/tool_parser.py",
+    "homework-lesson-10/agents",
+]
 
 
 def _git(args: list[str]) -> str:
@@ -143,7 +128,7 @@ def _model_endpoint_hash() -> str:
 
 
 def _corpus_hash() -> str | None:
-    index_dir = BASE_DIR / "data" / "index"
+    index_dir = BASE_DIR / "index"
     if not index_dir.is_dir():
         return None
     h = hashlib.sha256()
@@ -155,19 +140,18 @@ def _corpus_hash() -> str | None:
 
 
 def _git_runtime_status() -> tuple[bool, str]:
-    """(dirty, porcelain_output) для runtime-шляхів поточної бази."""
-    paths = _RUNTIME_PATHS[HW_BASE]
-    out = _git(["status", "--porcelain", "--", *paths])
+    """(dirty, porcelain_output) для runtime-шляхів hw10."""
+    out = _git(["status", "--porcelain", "--", *_RUNTIME_PATHS])
     return (bool(out.strip()), out)
 
 
 def _verify_manifest(manifest: dict) -> None:
     """Raise з осмисленим повідомленням при будь-якому drift."""
-    # Base-match guard
-    if manifest.get("hw_base") != HW_BASE:
+    # Base-match guard (manifest schema лишає поле hw_base для зворотної сумісності)
+    if manifest.get("hw_base") not in (None, "hw8"):
         raise RuntimeError(
             f"Manifest was recorded for hw_base={manifest.get('hw_base')!r} "
-            f"but current mode is {HW_BASE!r}. Wrong fixtures directory?"
+            "but hw10 now expects hw_base='hw8' (or unset). Re-record fixtures."
         )
 
     # Freshness (30 days)
@@ -178,7 +162,7 @@ def _verify_manifest(manifest: dict) -> None:
     if datetime.now(timezone.utc) - gen_at > timedelta(days=30):
         raise RuntimeError(
             f"Fixtures older than 30 days (generated_at={manifest['generated_at']}). "
-            f"Re-record: HW_BASE={HW_BASE} python scripts/record_fixtures.py"
+            "Re-record: python scripts/record_fixtures.py"
         )
 
     # Hash drift — all 4 dimensions that record_fixtures writes.
@@ -197,7 +181,6 @@ def _verify_manifest(manifest: dict) -> None:
             "changed since fixtures were recorded. Re-record with current model."
         )
     expected_corpus = _corpus_hash()
-    # corpus_hash є None коли індекс відсутній — приймаємо лише якщо manifest також None.
     if manifest.get("corpus_hash") != expected_corpus:
         raise RuntimeError(
             f"corpus_hash drift — FAISS index changed since fixtures recorded. "
@@ -209,21 +192,20 @@ def _verify_manifest(manifest: dict) -> None:
     head = _git(["rev-parse", "HEAD"])
     base_commit = manifest.get("base_commit")
     if base_commit and base_commit != head:
-        paths = _RUNTIME_PATHS[HW_BASE]
-        diff = _git(["diff", "--stat", f"{base_commit}", "HEAD", "--", *paths])
+        diff = _git(["diff", "--stat", f"{base_commit}", "HEAD", "--", *_RUNTIME_PATHS])
         if diff:
             raise RuntimeError(
                 f"Runtime code drift since fixtures recorded ({base_commit[:8]}..HEAD):\n"
                 f"{diff}\nRe-record fixtures or revert runtime paths."
             )
 
-    # Dirty-tree guard (ISSUE 1, third-pass)
+    # Dirty-tree guard
     dirty, porcelain = _git_runtime_status()
     if dirty:
         raise RuntimeError(
-            f"homework-lesson-{HW_BASE[-1]} runtime paths have uncommitted changes:\n"
+            f"hw10 runtime paths have uncommitted changes:\n"
             f"{porcelain}\n"
-            "Commit/stash or re-record fixtures. See plan §freshness guard."
+            "Commit/stash or re-record fixtures."
         )
 
 
@@ -303,7 +285,7 @@ def fixtures_dir() -> pathlib.Path:
 
 
 def load_agent_fixtures(name: str) -> list[dict]:
-    """Читає fixtures/{HW_BASE}/{name}_outputs.json під час parametrize-collection.
+    """Читає fixtures/hw8/{name}_outputs.json під час parametrize-collection.
 
     Якщо fixtures відсутні — повертає 1 stub-запис з маркером _missing_fixtures:
     тести побачать його через guard-helper `skip_if_stub(record)` і зроблять

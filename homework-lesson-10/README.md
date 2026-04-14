@@ -5,7 +5,21 @@
 > автоматизованими тестами через **DeepEval 3.9.5** і **Ragas 0.4.3** замість
 > ручного vibe-check.
 
-**Версія:** 1.0.2
+**Версія:** 1.0.3
+
+## Що покращено в 1.0.3
+
+- структура проєкту тепер літерально відповідає brief-у: усі tracked-файли
+  з `homework-lesson-8/` (крім `tests/` — його замінено hw10-тестами)
+  скопійовано в `homework-lesson-10/` — `agents/`, `config.py`, `data/`,
+  `ingest.py`, `main.py`, `retriever.py`, `schemas.py`, `supervisor.py`,
+  `tool_parser.py`, `tools.py`, `demo.gif`, `.env.example`
+- `conftest.py` спрощено — прибрано `HW_BASE` env var і mount
+  на `../homework-lesson-8/`, лишився лише `sys.path.insert(0, PROJECT_ROOT)`
+- `_RUNTIME_PATHS` оновлено на локальні `homework-lesson-10/{config,supervisor,
+  agents,...}` — staleness guard тепер детектує drift у самому hw10
+- виправлено шлях до FAISS index у `_corpus_hash` (hw8 тримає його в
+  `index/`, не в `data/index/`)
 
 ## Що покращено в 1.0.2
 
@@ -189,8 +203,9 @@ python scripts/record_fixtures.py
 ```
 
 Скрипт:
-1. Перевіряє, що runtime-шляхи `homework-lesson-8/` чисті
-   (`git status --porcelain` має бути порожнім; інакше `--allow-dirty`)
+1. Перевіряє, що runtime-шляхи `homework-lesson-10/` чисті
+   (`git status --porcelain` по `config.py`/`supervisor.py`/`agents/`/... має
+   бути порожнім; інакше `--allow-dirty`)
 2. Прогоняє supervisor по 15 golden-прикладах
 3. Захоплює tool_calls + per-agent outputs через LangChain callback
 4. Пише `fixtures/hw8/{planner,researcher,critic,e2e}_outputs.json` + `_manifest.json`
@@ -238,22 +253,47 @@ pytest tests/smoke/ -m live
 | `JUDGE_API_BASE` | `http://uaai-qwen3-next.qwen3-chat.svc:8000/v1` | endpoint Qwen3-Next-80B (опційно) |
 | `JUDGE_API_KEY` | `not-needed` | API ключ secondary judge |
 | `JUDGE_MODEL` | `Qwen3-Next-80B-A3B-Instruct` | назва моделі secondary judge |
-| `HW_BASE` | `hw8` | escape-hatch для зміни базової домашки (canonical = hw8) |
 
 ## Структура проєкту
 
+Згідно з brief-ом hw10 (`README.md`) — `tests/` + усі файли з hw8 + сам
+`README.md`. Додатково — hw10-специфічні артефакти (CHANGELOG, EVAL_HARNESS,
+pytest.ini, conftest.py, eval_config.py, fixtures/, scripts/).
+
 ```text
 homework-lesson-10/
-├── README.md                       # цей файл
+├── README.md                       # оригінальний brief hw10 (canonical task statement)
 ├── EVAL_HARNESS.md                 # детальна довідка по харнесу
-├── CHANGELOG.md                    # історія версій
+├── CHANGELOG.md                    # історія версій (Keep a Changelog)
 ├── pytest.ini                      # canonical config (testpaths, norecursedirs, markers)
-├── requirements.txt
-├── conftest.py                     # sys.path mount → hw8, staleness guard, fixtures
+├── requirements.txt                # hw8 deps + deepeval + ragas
+├── .env.example                    # шаблон env (з hw8)
+├── .gitignore                      # з hw8
+├── demo.gif                        # з hw8
+│
+│ # --- скопійовано з homework-lesson-8 (brief: "all files from hw8") ---
+├── agents/
+│   ├── __init__.py
+│   ├── planner.py
+│   ├── research.py
+│   └── critic.py
+├── config.py                       # Settings + create_llm() + dynamic prompts
+├── schemas.py                      # ResearchPlan + CritiqueResult
+├── supervisor.py                   # Supervisor agent (create_agent + HITL)
+├── main.py                         # REPL
+├── tools.py                        # web_search, read_url, knowledge_search, save_report
+├── tool_parser.py                  # Qwen3ChatWrapper для XML tool calls
+├── retriever.py                    # HybridRetriever (FAISS + BM25 + RRF + Infinity)
+├── ingest.py                       # PDF → chunks → embeddings → FAISS + BM25
+├── data/                           # PDF-документи (langchain, LLM, RAG)
+├── index/                          # FAISS + BM25 index (gitignored, регенерується)
+│
+│ # --- hw10-специфічне ---
+├── conftest.py                     # sys.path insert PROJECT_ROOT, staleness guard
 ├── eval_config.py                  # PrimaryJudgeLLM + SecondaryJudgeLLM + jury() + wrap_steps()
 ├── fixtures/
 │   └── hw8/
-│       ├── _manifest.json
+│       ├── _manifest.json          # 4 hashes + base_commit + base_dirty + generated_at
 │       ├── planner_outputs.json
 │       ├── researcher_outputs.json
 │       ├── critic_outputs.json

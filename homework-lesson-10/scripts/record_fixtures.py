@@ -1,14 +1,14 @@
 """Record actual_output + tool_calls for every agent role across the golden
-dataset. Writes fixtures/{HW_BASE}/*_outputs.json and a freshness manifest.
+dataset. Writes fixtures/hw8/*_outputs.json and a freshness manifest.
 
-Fail-loud (hw8 lesson): any error raises instead of silently appending
-{"error": ...} — dirty fixtures are worse than no fixtures.
+Fail-loud: any error raises instead of silently appending {"error": ...} —
+dirty fixtures are worse than no fixtures.
 
-Dirty-tree guard: refuses to run if homework-lesson-{HW_BASE} has uncommitted
-changes in runtime paths, unless --allow-dirty is passed.
+Dirty-tree guard: refuses to run if hw10 has uncommitted changes in runtime
+paths (config / supervisor / agents / tools / etc.), unless --allow-dirty.
 
 Usage:
-    python scripts/record_fixtures.py                 # strict (default, HW_BASE=hw8)
+    python scripts/record_fixtures.py                 # strict (default)
     python scripts/record_fixtures.py --allow-dirty   # ad-hoc debug
 """
 from __future__ import annotations
@@ -27,35 +27,22 @@ from typing import Any
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 REPO_ROOT = PROJECT_ROOT.parent
-HW_BASE = os.environ.get("HW_BASE", "hw8").strip().lower()
+BASE_DIR = PROJECT_ROOT  # hw8 source files live under hw10 directly
+sys.path.insert(0, str(PROJECT_ROOT))
 
-if HW_BASE not in {"hw8", "hw9"}:
-    raise SystemExit(f"HW_BASE must be 'hw8' or 'hw9', got: {HW_BASE!r}")
-
-BASE_DIR = REPO_ROOT / f"homework-lesson-{HW_BASE[-1]}"
-sys.path.insert(0, str(BASE_DIR))
-
-FIXTURES_DIR = PROJECT_ROOT / "fixtures" / HW_BASE
+FIXTURES_DIR = PROJECT_ROOT / "fixtures" / "hw8"
 FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
 
-RUNTIME_PATHS = {
-    "hw9": [
-        "homework-lesson-9/config.py",
-        "homework-lesson-9/supervisor.py",
-        "homework-lesson-9/retriever.py",
-        "homework-lesson-9/mcp_utils.py",
-        "homework-lesson-9/health.py",
-        "homework-lesson-9/acp_server.py",
-        "homework-lesson-9/agents",
-        "homework-lesson-9/mcp_servers",
-    ],
-    "hw8": [
-        "homework-lesson-8/config.py",
-        "homework-lesson-8/supervisor.py",
-        "homework-lesson-8/tools.py",
-        "homework-lesson-8/main.py",
-    ],
-}
+RUNTIME_PATHS = [
+    "homework-lesson-10/config.py",
+    "homework-lesson-10/supervisor.py",
+    "homework-lesson-10/retriever.py",
+    "homework-lesson-10/tools.py",
+    "homework-lesson-10/main.py",
+    "homework-lesson-10/schemas.py",
+    "homework-lesson-10/tool_parser.py",
+    "homework-lesson-10/agents",
+]
 
 
 def _git(args: list[str]) -> str:
@@ -96,7 +83,7 @@ def _prompts_hash() -> str:
 
 def _corpus_hash() -> str | None:
     """Hash of FAISS index + doc manifest. Returns None if base has no RAG corpus."""
-    index_dir = BASE_DIR / "data" / "index"
+    index_dir = BASE_DIR / "index"
     if not index_dir.is_dir():
         return None
     h = hashlib.sha256()
@@ -120,7 +107,7 @@ def _model_endpoint_hash() -> str:
 
 
 def _runtime_dirty() -> tuple[bool, str]:
-    out = _git(["status", "--porcelain", "--", *RUNTIME_PATHS[HW_BASE]])
+    out = _git(["status", "--porcelain", "--", *RUNTIME_PATHS])
     return (bool(out.strip()), out)
 
 
@@ -297,7 +284,7 @@ def _write_per_agent(records: list[dict]) -> None:
 def _write_manifest(allow_dirty: bool, was_dirty: bool) -> None:
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "hw_base": HW_BASE,
+        "hw_base": "hw8",
         "base_commit": _git(["rev-parse", "HEAD"]),
         "base_dirty": was_dirty if allow_dirty else False,
         "model_name": __import__("config").Settings().model_name,
@@ -326,7 +313,7 @@ def main() -> None:
     golden = json.loads(
         (PROJECT_ROOT / "tests" / "golden_dataset.json").read_text()
     )
-    print(f"Recording fixtures for HW_BASE={HW_BASE} ({len(golden)} examples)…")
+    print(f"Recording fixtures for hw10 ({len(golden)} examples)…")
     records = asyncio.run(_main_async(golden))
     _write_per_agent(records)
     _write_manifest(allow_dirty=args.allow_dirty, was_dirty=dirty)
