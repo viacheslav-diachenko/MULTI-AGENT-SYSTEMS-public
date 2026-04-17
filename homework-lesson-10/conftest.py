@@ -15,6 +15,7 @@ Responsibilities of this conftest:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import pathlib
@@ -86,9 +87,13 @@ def _hash_bytes(data: bytes) -> str:
 
 
 def _prompts_hash() -> str:
-    """Hash конкатенованих prompt-функцій з обраної бази.
-    hw8 експортує get_supervisor_prompt/get_planner_prompt/get_researcher_prompt/get_critic_prompt;
-    якщо набір інший — fallback до config.py bytes."""
+    """Hash the *source code* of prompt-builder functions, not their runtime
+    output. Supervisor/Critic prompts embed ``datetime.now()`` at call-time
+    (see config.py:get_supervisor_prompt / get_critic_prompt), so hashing the
+    returned string yields a different value every microsecond — that caused
+    a false ``prompts_hash drift`` on every session and silently skipped the
+    whole suite. Hashing ``inspect.getsource(fn)`` tracks real prompt edits
+    and stays stable between ``record_fixtures.py`` and verification."""
     try:
         import config  # type: ignore
     except ImportError as exc:  # pragma: no cover
@@ -103,13 +108,10 @@ def _prompts_hash() -> str:
     ):
         fn = getattr(config, fn_name, None)
         if callable(fn):
-            try:
-                chunks.append(str(fn()).encode("utf-8"))
-            except TypeError:
-                # Деякі prompt-getter-и приймають settings — передаємо None.
-                chunks.append(str(fn(None)).encode("utf-8"))
+            chunks.append(inspect.getsource(fn).encode("utf-8"))
     if not chunks:
-        # hw8 може тримати промпти як константи в config.py.
+        # Fallback: if no prompt-builder functions exist (e.g. prompts are
+        # module-level constants), hash config.py bytes as a proxy.
         chunks.append((BASE_DIR / "config.py").read_bytes())
     return _hash_bytes(b"\n---\n".join(chunks))
 

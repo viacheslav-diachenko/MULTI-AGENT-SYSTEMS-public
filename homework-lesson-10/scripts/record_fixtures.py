@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import pathlib
@@ -61,6 +62,12 @@ def _hash_bytes(data: bytes) -> str:
 
 
 def _prompts_hash() -> str:
+    """Hash the *source code* of prompt-builder functions, not their runtime
+    output. Supervisor/Critic prompts embed ``datetime.now()`` at call-time,
+    so hashing the returned string changes every microsecond — that broke the
+    freshness manifest (every test session saw false prompts_hash drift and
+    skipped the suite). Hashing the source tracks real prompt edits and
+    remains stable between recording and verification."""
     import config  # type: ignore
 
     chunks: list[bytes] = []
@@ -72,10 +79,7 @@ def _prompts_hash() -> str:
     ):
         fn = getattr(config, name, None)
         if callable(fn):
-            try:
-                chunks.append(str(fn()).encode("utf-8"))
-            except TypeError:
-                chunks.append(str(fn(None)).encode("utf-8"))
+            chunks.append(inspect.getsource(fn).encode("utf-8"))
     if not chunks:
         chunks.append((BASE_DIR / "config.py").read_bytes())
     return _hash_bytes(b"\n---\n".join(chunks))
@@ -129,13 +133,15 @@ def _safe_dump(record: Any) -> Any:
     return record
 
 
-# Delegation wrappers in the supervisor whose start marks the beginning of a
-# sub-agent execution scope. Children of these tool calls are attributed to
-# the corresponding sub-agent.
+# Supervisor-level tools that wrap a sub-agent. Tool names must match the
+# @tool functions registered in supervisor.build_supervisor() — supervisor.py
+# passes them as `plan/research/critique` (not `delegate_to_*`). When one of
+# these tools starts, its run_id is tagged with the sub-agent name and every
+# nested tool_call inherits the tag via parent_of walk.
 _DELEGATION_TO_AGENT = {
-    "delegate_to_planner": "planner",
-    "delegate_to_researcher": "researcher",
-    "delegate_to_critic": "critic",
+    "plan": "planner",
+    "research": "researcher",
+    "critique": "critic",
 }
 
 

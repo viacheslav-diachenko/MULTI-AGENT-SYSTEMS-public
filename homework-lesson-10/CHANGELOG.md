@@ -4,6 +4,42 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/).
 
+## [1.0.4] - 2026-04-17
+
+### Виправлено
+
+- **[P0] `_prompts_hash()` drift — staleness-guard скіпав усю сесію** —
+  `get_supervisor_prompt()` і `get_critic_prompt()` вставляють
+  `datetime.now()` в тіло промпта (див. `config.py:101,184`), а
+  `_prompts_hash()` у `conftest.py` і `scripts/record_fixtures.py`
+  хешував **runtime output** цих функцій. Мікросекундна точність
+  `datetime.now().isoformat()` давала різний хеш на кожному виклику —
+  manifest, записаний в момент `T`, вже не проходив перевірку в момент
+  `T+1 мс`. `_verify_manifest()` кидав `RuntimeError: prompts_hash drift`,
+  який `_ensure_manifest_validated()` конвертував у `pytest.skip(...)`,
+  і **вся сесія gated-тестів тихо не виконувалась**. Тепер хешуємо
+  `inspect.getsource(fn)` — стабільно між запусками, реагує на реальні
+  зміни промптів. Same-hash verified:
+  `conftest._prompts_hash() == record_fixtures._prompts_hash()`.
+- **[P0] Agent attribution не працював — всі tool_calls ставали
+  `agent="supervisor"`** — `scripts/record_fixtures.py:_DELEGATION_TO_AGENT`
+  чекав tool names `delegate_to_planner` / `delegate_to_researcher` /
+  `delegate_to_critic`, але supervisor насправді реєструє їх як
+  `plan` / `research` / `critique` (див. `supervisor.py:186`). Імена не
+  збігалися → `agent_tag_of` ніколи не заповнювалось →
+  `_resolve_agent(prid)` завжди повертав `"supervisor"` → `test_tools.py`
+  фільтрував `tc["agent"] == "planner"` і знаходив 0 calls → падав з
+  "Planner never called any of {search_tools}". Виправлено мапу, щоб
+  відповідала фактичним supervisor tools. (Крос-ревью від codex-report
+  2026-04-17.)
+
+### Відкрите
+
+- Після цих фіксів потрібен свіжий запис fixtures:
+  `python scripts/record_fixtures.py`. Існуючий manifest (якщо
+  записаний до 1.0.4) стане stale через зміну hash-алгоритму — це
+  очікувано, не баг.
+
 ## [1.0.3] - 2026-04-14
 
 ### Виправлено

@@ -5,7 +5,22 @@
 > автоматизованими тестами через **DeepEval 3.9.5** і **Ragas 0.4.3** замість
 > ручного vibe-check.
 
-**Версія:** 1.0.3
+**Версія:** 1.0.4
+
+## Що покращено в 1.0.4
+
+- **[P0] `_prompts_hash()`** тепер хешує source code prompt-функцій через
+  `inspect.getsource(fn)`, а не їх runtime output — `datetime.now()`
+  всередині `get_supervisor_prompt` / `get_critic_prompt` раніше давав
+  різний hash кожну мікросекунду, через що `_verify_manifest()` кидав
+  `prompts_hash drift` і `_ensure_manifest_validated()` скіпав всю
+  gated-сесію
+- **[P0] Agent attribution у `scripts/record_fixtures.py`** —
+  `_DELEGATION_TO_AGENT` тепер мапиться на реальні supervisor tools
+  (`plan` / `research` / `critique`), а не на неіснуючі
+  `delegate_to_*`; без цього фіксу всі tool_calls маркувались
+  `agent="supervisor"` і `test_tools.py` падав з "Planner never called
+  any of {search_tools}"
 
 ## Що покращено в 1.0.3
 
