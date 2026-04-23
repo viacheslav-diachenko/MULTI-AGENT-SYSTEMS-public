@@ -1,0 +1,192 @@
+langfuse:
+  salt:
+    secretKeyRef:
+      name: langfuse-app-secrets
+      key: salt
+  encryptionKey:
+    secretKeyRef:
+      name: langfuse-app-secrets
+      key: encryption-key
+  # NOTE: nextauth.url is the *public* URL users sign in at — used for cookie
+  # domain and OAuth callback construction. Set to the Traefik-exposed HTTPS
+  # host; NEXTAUTH_URL_INTERNAL (below) lets in-cluster callers reach the
+  # same backend over HTTP without bouncing through Authelia.
+  nextauth:
+    url: http://langfuse-web.langfuse.svc:3000
+    secret:
+      secretKeyRef:
+        name: langfuse-app-secrets
+        key: nextauth-secret
+
+  features:
+    telemetryEnabled: false
+    signUpDisabled: true
+
+  additionalEnv:
+    # NextAuth uses NEXTAUTH_URL for cookie domain/redirect; we set it to the
+    # public ingress so OAuth callbacks land on https://. NEXTAUTH_URL_INTERNAL
+    # lets internal callers (Playwright via ClusterIP) hit the same backend
+    # without bouncing through Traefik+Authelia.
+    - name: NEXTAUTH_URL_INTERNAL
+      value: "http://langfuse-web.langfuse.svc:3000"
+    - name: LANGFUSE_INIT_ORG_ID
+      value: "homework-org"
+    - name: LANGFUSE_INIT_ORG_NAME
+      value: "Homework"
+    - name: LANGFUSE_INIT_PROJECT_ID
+      value: "homework-12"
+    - name: LANGFUSE_INIT_PROJECT_NAME
+      value: "homework-12"
+    - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+      valueFrom:
+        secretKeyRef:
+          name: langfuse-init-secrets
+          key: public-key
+    - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: langfuse-init-secrets
+          key: secret-key
+    - name: LANGFUSE_INIT_USER_NAME
+      value: "Homework Admin"
+    - name: LANGFUSE_INIT_USER_EMAIL
+      valueFrom:
+        secretKeyRef:
+          name: langfuse-init-secrets
+          key: admin-email
+    - name: LANGFUSE_INIT_USER_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: langfuse-init-secrets
+          key: admin-password
+
+  ingress:
+    enabled: false
+
+  web:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  worker:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+postgresql:
+  deploy: true
+  auth:
+    existingSecret: langfuse-postgres-secret
+    secretKeys:
+      userPasswordKey: password
+    database: postgres_langfuse
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: local-path
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+redis:
+  deploy: true
+  auth:
+    existingSecret: langfuse-redis-secret
+    existingSecretPasswordKey: password
+  primary:
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: local-path
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+clickhouse:
+  deploy: true
+  auth:
+    existingSecret: langfuse-clickhouse-secret
+    existingSecretKey: password
+  replicaCount: 1
+  clusterEnabled: false
+  shards: 1
+  resourcesPreset: "none"
+  resources:
+    requests:
+      cpu: 300m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: local-path
+  zookeeper:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: local-path
+    resourcesPreset: "none"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+s3:
+  deploy: true
+  storageProvider: s3
+  forcePathStyle: true
+  bucket: langfuse
+  region: auto
+  accessKeyId:
+    secretKeyRef:
+      name: langfuse-s3-secret
+      key: accessKeyId
+  secretAccessKey:
+    secretKeyRef:
+      name: langfuse-s3-secret
+      key: secretAccessKey
+  defaultBuckets: langfuse
+  auth:
+    rootUser: minio
+    existingSecret: langfuse-s3-secret
+    # MinIO root credentials must match what Langfuse uses via
+    # s3.accessKeyId / s3.secretAccessKey (same secret keys, same values),
+    # otherwise MinIO returns SignatureDoesNotMatch on trace ingestion.
+    rootUserSecretKey: accessKeyId
+    rootPasswordSecretKey: secretAccessKey
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi

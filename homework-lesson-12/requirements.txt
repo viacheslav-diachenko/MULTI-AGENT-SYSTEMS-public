@@ -1,0 +1,23 @@
+# Inherited from hw10 runtime (pins identical to the working hw10 .venv)
+langgraph==1.1.6
+langgraph-prebuilt==1.0.9
+langgraph-checkpoint==4.0.1
+langchain==1.2.13
+langchain-classic==1.0.3
+langchain-core==1.2.20
+langchain-openai==1.1.11
+langchain-community==0.4.1
+pydantic==2.12.5
+pydantic-settings==2.13.1
+httpx==0.28.1
+python-dotenv>=1.0
+
+# RAG + tools (from hw10 runtime)
+ddgs==9.11.4
+trafilatura==2.0.0
+faiss-cpu==1.13.2
+rank-bm25==0.2.2
+pypdf==6.9.1
+
+# Observability (hw12 — Langfuse self-hosted)
+langfuse>=3,<4

@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+index/
+output/
+.venv/
+
+# hw12: real secret manifest (only the blank template is tracked)
+k8s/langfuse-secrets.yaml

@@ -1,0 +1,45 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: authelia-forward-auth
+  namespace: langfuse
+spec:
+  forwardAuth:
+    address: http://auth-server.onyx.svc:9091/api/authz/forward-auth
+    authResponseHeaders:
+      - Remote-User
+      - Remote-Groups
+      - Remote-Name
+      - Remote-Email
+    trustForwardHeader: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: langfuse-web
+  namespace: langfuse
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: >-
+      langfuse-authelia-forward-auth@kubernetescrd,
+      kube-system-security-headers@kubernetescrd,
+      kube-system-rate-limit@kubernetescrd,
+      kube-system-compression@kubernetescrd
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ualangfuse.elkogroup.com
+      http:
+        paths:
+          - backend:
+              service:
+                name: langfuse-web
+                port:
+                  number: 3000
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts:
+        - ualangfuse.elkogroup.com
