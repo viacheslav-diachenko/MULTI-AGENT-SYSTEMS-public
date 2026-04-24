@@ -7,12 +7,15 @@ langfuse:
     secretKeyRef:
       name: langfuse-app-secrets
       key: encryption-key
-  # NOTE: nextauth.url is the *public* URL users sign in at — used for cookie
-  # domain and OAuth callback construction. Set to the Traefik-exposed HTTPS
-  # host; NEXTAUTH_URL_INTERNAL (below) lets in-cluster callers reach the
-  # same backend over HTTP without bouncing through Authelia.
+  # NOTE: nextauth.url is the *public* URL users sign in at — used for
+  # cookie Domain and OAuth callback construction. It MUST match the host
+  # the browser uses; otherwise the cookie is dropped after Authelia and
+  # the user gets bounced back to /auth/sign-in. NEXTAUTH_URL_INTERNAL
+  # (below) lets in-cluster callers reach the same backend over HTTP
+  # without bouncing through Traefik+Authelia, so seed/automation
+  # scripts can authenticate via ClusterIP.
   nextauth:
-    url: http://langfuse-web.langfuse.svc:3000
+    url: https://ualangfuse.elkogroup.com
     secret:
       secretKeyRef:
         name: langfuse-app-secrets

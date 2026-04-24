@@ -70,16 +70,26 @@
 
 ### Виправлено (після першого прогону)
 
-- **[P1] NextAuth redirect → Authelia loop в UI login.** За замовчуванням
-  `langfuse.nextauth.url=https://ualangfuse.elkogroup.com` — NextAuth
-  перенаправляв login-callback на зовнішній URL, який ловила Authelia
-  forward-auth, і session-token cookie не встановлювався. Для automation
-  (Playwright screenshots, seed скрипти) додали `NEXTAUTH_URL_INTERNAL=
-  http://langfuse-web.langfuse.svc:3000` у `langfuse.additionalEnv` і
-  перевели `langfuse.nextauth.url` на той самий internal host. Зовнішній
-  HTTPS доступ до UI залишився незмінним — Traefik + Authelia досі
-  працюють для human users. Задокументовано у `k8s/langfuse-values.yaml`
-  коментарем.
+- **[P1] Dual-URL NextAuth (public HTTPS + internal HTTP) — фінальна
+  конфігурація.** Дві окремі вимоги до session-cookie domain:
+  (a) external user → `https://ualangfuse.elkogroup.com` через
+  Authelia → cookie повинен мати `Domain=ualangfuse.elkogroup.com` +
+  `Secure`, інакше браузер відкине;
+  (b) in-cluster automation (Playwright, seed скрипти) ходить на
+  `http://langfuse-web.langfuse.svc:3000` без HTTPS — потрібна
+  можливість логінитися без `Secure`-cookies і без проходу через
+  Authelia.
+  Перший підхід тимчасово виставив `nextauth.url=internal` для
+  Playwright, але це зламало browser-flow: cookie встановлювався
+  на internal host і не зберігався, користувач після Authelia
+  повертався на /auth/sign-in.
+  Фінальне рішення: `nextauth.url=https://ualangfuse.elkogroup.com`
+  (publicly correct cookie domain) + `NEXTAUTH_URL_INTERNAL=
+  http://langfuse-web.langfuse.svc:3000` у `additionalEnv`. NextAuth
+  публічно знає про HTTPS host (cookie OK для browser), але внутрішні
+  callbacks резолвляться на in-cluster URL (Playwright/seed працюють
+  через ClusterIP). Шаблон з NextAuth docs про reverse-proxy.
+  Задокументовано у `k8s/langfuse-values.yaml`.
 - **[P1] MinIO root password мапингу.** `s3.auth.rootPasswordSecretKey`
   спочатку вказував на `rootPassword`, у той час як Langfuse web/worker
   читали `s3.secretAccessKey` — через це `SignatureDoesNotMatch` на
